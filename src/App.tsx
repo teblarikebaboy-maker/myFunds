@@ -801,6 +801,7 @@ function SavingsPage({
 
 function LoansPage({
   borrowers,
+  guarantors,
   onAddBorrower,
   onAddBorrowerInterest,
   onPayBorrowerInterest,
@@ -808,6 +809,7 @@ function LoansPage({
   onRemoveBorrower,
 }: {
   borrowers: Borrower[]
+  guarantors: string[]
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number) => void
@@ -816,6 +818,7 @@ function LoansPage({
 }) {
   const [isAddingBorrower, setIsAddingBorrower] = useState(false)
   const [borrowerName, setBorrowerName] = useState('')
+  const [guarantorName, setGuarantorName] = useState('')
   const [borrowerLoanAmount, setBorrowerLoanAmount] = useState('')
   const [borrowerError, setBorrowerError] = useState('')
   const [payingBorrowerId, setPayingBorrowerId] = useState<string | null>(null)
@@ -851,6 +854,10 @@ function LoansPage({
       setBorrowerError('Enter the borrower’s name.')
       return
     }
+    if (!guarantorName || !guarantors.includes(guarantorName)) {
+      setBorrowerError('Select a registered member as guarantor.')
+      return
+    }
     if (borrowerLoanAmount === '' || !Number.isFinite(loanAmount) || loanAmount <= 0) {
       setBorrowerError('Enter a loan amount greater than zero.')
       return
@@ -859,6 +866,7 @@ function LoansPage({
     onAddBorrower({
       id: crypto.randomUUID(),
       name,
+      guarantorName,
       email: '',
       loanAmount,
       paydayInterest: loanAmount * 0.03,
@@ -871,6 +879,7 @@ function LoansPage({
       }],
     })
     setBorrowerName('')
+    setGuarantorName('')
     setBorrowerLoanAmount('')
     setBorrowerError('')
     setIsAddingBorrower(false)
@@ -934,7 +943,6 @@ function LoansPage({
           <button type="button" className="secondary-button" onClick={() => setIsAddingBorrower((open) => !open)}>
             {isAddingBorrower ? 'Cancel' : 'Add borrower'}
           </button>
-          <button type="button" className="secondary-button">Pay schedule</button>
         </div>
       </section>
 
@@ -952,6 +960,22 @@ function LoansPage({
               }}
               placeholder="Full name"
             />
+          </label>
+          <label>
+            Guarantor
+            <select
+              required
+              value={guarantorName}
+              onChange={(event) => {
+                setGuarantorName(event.target.value)
+                setBorrowerError('')
+              }}
+            >
+              <option value="">Select a registered member</option>
+              {guarantors.map((name) => (
+                <option key={name} value={name}>{name}</option>
+              ))}
+            </select>
           </label>
           <label>
             Payday interest (3%)
@@ -973,6 +997,9 @@ function LoansPage({
             />
           </label>
           <button type="submit" className="primary-button">Save borrower</button>
+          {guarantors.length === 0 && (
+            <p className="member-error" role="alert">No registered members are available to select as a guarantor.</p>
+          )}
           {borrowerError && <p className="member-error" role="alert">{borrowerError}</p>}
         </form>
       )}
@@ -1047,6 +1074,7 @@ function LoansPage({
                   </div>
                 </div>
                 <div className="borrower-metrics">
+                  {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
                   <span><strong>Principal:</strong> {formatCurrency(borrower.loanAmount)}</span>
                   <span><strong>Interest:</strong> {formatCurrency(borrower.paydayInterest)}</span>
                 </div>
@@ -1365,6 +1393,12 @@ function App() {
   const initialAccounts = useRef(accounts)
   const initialBorrowers = useRef(borrowers)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const registeredGuarantors = accounts
+    .flatMap((account) => {
+      const email = account.email.trim().toLowerCase()
+      const member = members.find((candidate) => candidate.accountEmail?.trim().toLowerCase() === email)
+      return member ? [member.name] : []
+    })
   const signedInMember = members.find((member) =>
     member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
   )
@@ -1724,6 +1758,7 @@ function App() {
         return (
           <LoansPage
             borrowers={borrowers}
+            guarantors={registeredGuarantors}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
             onPayBorrowerInterest={payBorrowerInterest}

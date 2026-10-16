@@ -30,6 +30,7 @@ export type Borrower = {
   id: string
   name: string
   email?: string
+  guarantorName?: string
   loanAmount: number
   paydayInterest: number
   createdAt: string
@@ -283,6 +284,7 @@ export const readWorkbookData = async (
       id,
       name,
       email: String(row.getCell(3).value ?? '').trim(),
+      guarantorName: String(row.getCell(8).value ?? '').trim(),
       loanAmount,
       paydayInterest,
       createdAt: getCellDate(row.getCell(5).value),
@@ -336,7 +338,7 @@ export const writeWorkbookData = async (
   ]))
 
   const borrowersSheet = workbook.addWorksheet('Borrowers')
-  borrowersSheet.addRow(['ID', 'Name', 'Email', 'Payday Interest (PHP)', 'Created At', 'Loan Amount (PHP)', 'Loan Transactions (JSON)'])
+  borrowersSheet.addRow(['ID', 'Name', 'Email', 'Payday Interest (PHP)', 'Created At', 'Loan Amount (PHP)', 'Loan Transactions (JSON)', 'Guarantor'])
   borrowers.forEach((borrower) => borrowersSheet.addRow([
     borrower.id,
     borrower.name,
@@ -345,6 +347,7 @@ export const writeWorkbookData = async (
     borrower.createdAt,
     borrower.loanAmount,
     JSON.stringify(borrower.transactions ?? []),
+    borrower.guarantorName ?? '',
   ]))
 
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
