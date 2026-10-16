@@ -121,12 +121,6 @@ const savingsPlans = [
   { name: 'Home down payment', value: '₱15,600', target: '₱30,000', rate: 52 },
 ]
 
-const loanOverview = [
-  { name: 'Mortgage', balance: '₱184,500', rate: '4.2%', payment: '₱1,280' },
-  { name: 'Car loan', balance: '₱12,400', rate: '3.6%', payment: '₱410' },
-  { name: 'Student loan', balance: '₱8,200', rate: '2.9%', payment: '₱220' },
-]
-
 const profitsData = [
   { label: 'Net profit', value: '₱11,240', tone: 'positive' },
   { label: 'YTD margin', value: '23.8%', tone: 'positive' },
@@ -810,11 +804,15 @@ function LoansPage({
   onAddBorrower,
   onAddBorrowerInterest,
   onPayBorrowerInterest,
+  onPayBorrowerPrincipal,
+  onRemoveBorrower,
 }: {
   borrowers: Borrower[]
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number) => void
+  onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
+  onRemoveBorrower: (borrowerId: string) => void
 }) {
   const [isAddingBorrower, setIsAddingBorrower] = useState(false)
   const [borrowerName, setBorrowerName] = useState('')
@@ -823,6 +821,23 @@ function LoansPage({
   const [payingBorrowerId, setPayingBorrowerId] = useState<string | null>(null)
   const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
   const [interestPaymentError, setInterestPaymentError] = useState('')
+  const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
+  const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
+  const [principalPaymentError, setPrincipalPaymentError] = useState('')
+  const [borrowerSearch, setBorrowerSearch] = useState('')
+  const filteredBorrowers = borrowers.filter((borrower) =>
+    borrower.name.toLowerCase().includes(borrowerSearch.trim().toLowerCase()),
+  )
+  const loanHistory = borrowers
+    .flatMap((borrower) => (borrower.transactions ?? []).map((transaction) => ({
+      ...transaction,
+      borrowerId: borrower.id,
+      borrowerName: borrower.name,
+      amount: transaction.type === 'interest-payment' || transaction.type === 'principal-payment'
+        ? -transaction.amount
+        : transaction.amount,
+    })))
+    .sort((first, second) => second.date.localeCompare(first.date))
   const borrowerLoanValue = Number(borrowerLoanAmount)
   const paydayInterest = Number.isFinite(borrowerLoanValue) && borrowerLoanValue > 0
     ? borrowerLoanValue * 0.03
@@ -882,6 +897,29 @@ function LoansPage({
     setPayingBorrowerId(null)
     setInterestPaymentAmount('')
     setInterestPaymentError('')
+  }
+
+  const handlePayBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    const amount = Number(principalPaymentAmount)
+    if (principalPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
+      setPrincipalPaymentError('Enter an amount greater than zero.')
+      return
+    }
+    const roundedAmount = Number(amount.toFixed(2))
+    if (roundedAmount <= 0) {
+      setPrincipalPaymentError('Enter an amount of at least 0.01.')
+      return
+    }
+    if (roundedAmount > borrower.loanAmount) {
+      setPrincipalPaymentError('Payment cannot exceed the outstanding principal.')
+      return
+    }
+
+    onPayBorrowerPrincipal(borrower.id, roundedAmount)
+    setPayingPrincipalBorrowerId(null)
+    setPrincipalPaymentAmount('')
+    setPrincipalPaymentError('')
   }
 
   return (
@@ -945,11 +983,22 @@ function LoansPage({
             <p className="eyebrow">Borrowers</p>
             <h3>Borrower directory</h3>
           </div>
-          <span className="meta-pill">{borrowers.length} total</span>
+          <div className="borrower-directory-controls">
+            <input
+              className="borrower-search"
+              type="search"
+              aria-label="Search borrowers"
+              value={borrowerSearch}
+              onChange={(event) => setBorrowerSearch(event.target.value)}
+              placeholder="Search borrowers"
+            />
+            <span className="meta-pill">{borrowers.length} total</span>
+          </div>
         </div>
         {borrowers.length > 0 ? (
-          <ul className="borrower-list">
-            {borrowers.map((borrower) => (
+          filteredBorrowers.length > 0 ? (
+            <ul className="borrower-list">
+            {filteredBorrowers.map((borrower) => (
               <li key={borrower.id} className="borrower-item">
                 <div className="borrower-item-header">
                   <strong>{borrower.name}</strong>
@@ -964,14 +1013,36 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
+                      disabled={borrower.loanAmount <= 0}
+                      onClick={() => {
+                        setPayingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
+                        setPrincipalPaymentAmount('')
+                        setPrincipalPaymentError('')
+                        setPayingBorrowerId(null)
+                      }}
+                    >
+                      Pay principal
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button borrower-interest-button"
                       disabled={borrower.paydayInterest <= 0}
                       onClick={() => {
                         setPayingBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setInterestPaymentAmount('')
                         setInterestPaymentError('')
+                        setPayingPrincipalBorrowerId(null)
                       }}
                     >
                       Pay interest
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button borrower-interest-button"
+                      disabled={borrower.loanAmount !== 0 || borrower.paydayInterest !== 0}
+                      onClick={() => onRemoveBorrower(borrower.id)}
+                    >
+                      Remove
                     </button>
                   </div>
                 </div>
@@ -1015,6 +1086,42 @@ function LoansPage({
                     {interestPaymentError && <p className="member-error" role="alert">{interestPaymentError}</p>}
                   </form>
                 )}
+                {payingPrincipalBorrowerId === borrower.id && (
+                  <form
+                    className="interest-payment-form"
+                    noValidate
+                    onSubmit={(event) => handlePayBorrowerPrincipal(event, borrower)}
+                  >
+                    <label>
+                      Payment amount (up to {formatCurrency(borrower.loanAmount)})
+                      <input
+                        type="number"
+                        min="0.01"
+                        max={borrower.loanAmount}
+                        step="any"
+                        required
+                        value={principalPaymentAmount}
+                        onChange={(event) => {
+                          setPrincipalPaymentAmount(event.target.value)
+                          setPrincipalPaymentError('')
+                        }}
+                        placeholder="0"
+                      />
+                    </label>
+                    <button type="submit" className="primary-button">Record payment</button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setPayingPrincipalBorrowerId(null)
+                        setPrincipalPaymentError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {principalPaymentError && <p className="member-error" role="alert">{principalPaymentError}</p>}
+                  </form>
+                )}
                 <div className="loan-transactions">
                   <small>Loan transactions</small>
                   {borrower.transactions && borrower.transactions.length > 0 ? (
@@ -1022,9 +1129,13 @@ function LoansPage({
                       {borrower.transactions.map((transaction) => (
                         <li key={transaction.id} className="loan-transaction-item">
                           <span className={`transaction-type ${transaction.type}`}>
-                            {transaction.type === 'interest-payment' ? 'Interest paid' : transaction.type === 'interest' ? 'Interest' : 'Loan'}
+                            {transaction.type === 'interest-payment'
+                              ? 'Interest paid'
+                              : transaction.type === 'principal-payment'
+                                ? 'Principal paid'
+                                : transaction.type === 'interest' ? 'Interest' : 'Loan'}
                           </span>
-                          <strong>{transaction.type === 'interest-payment' ? '-' : ''}{formatCurrency(transaction.amount)}</strong>
+                          <strong>{transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}{formatCurrency(transaction.amount)}</strong>
                           <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
                         </li>
                       ))}
@@ -1035,53 +1146,48 @@ function LoansPage({
                 </div>
               </li>
             ))}
-          </ul>
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No borrowers match “{borrowerSearch}”.</p>
+          )
         ) : (
           <p className="savings-history-empty">No borrowers added yet.</p>
         )}
       </section>
 
-      <section className="card-grid">
-        {loanOverview.map((loan) => (
-          <article key={loan.name} className="panel stat-panel">
-            <div className="mini-header">
-              <span>{loan.name}</span>
-              <strong>{loan.balance}</strong>
-            </div>
-            <div className="info-row">
-              <small>Rate</small>
-              <span>{loan.rate}</span>
-            </div>
-            <div className="info-row">
-              <small>Monthly payment</small>
-              <span>{loan.payment}</span>
-            </div>
-          </article>
-        ))}
-      </section>
-
       <section className="panel full-width-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Projection</p>
-            <h3>Debt payoff timing</h3>
+            <p className="eyebrow">Loan History</p>
+            <h3>Loan transactions</h3>
           </div>
         </div>
-        <div className="stats-grid">
-          <div className="stat-box">
-            <span>Total debt</span>
-            <strong>₱205,100</strong>
-          </div>
-          <div className="stat-box">
-            <span>Interest saved</span>
-            <strong>₱4,820</strong>
-          </div>
-          <div className="stat-box">
-            <span>Payoff date</span>
-            <strong>2029-07</strong>
-          </div>
-        </div>
+        {loanHistory.length > 0 ? (
+          <ul className="transaction-list savings-history-list">
+            {loanHistory.map((transaction) => (
+              <li key={`${transaction.borrowerId}-${transaction.id}`} className="transaction-item loan-history-item">
+                <div>
+                  <strong>
+                    {transaction.type === 'interest-payment'
+                      ? 'Interest paid'
+                      : transaction.type === 'principal-payment'
+                        ? 'Principal paid'
+                        : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
+                    {' · '}{transaction.borrowerName}
+                  </strong>
+                  <small>{formatDate(transaction.date)}</small>
+                </div>
+                <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                  {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="savings-history-empty">No loan transactions yet.</p>
+        )}
       </section>
+
     </main>
   )
 }
@@ -1515,6 +1621,13 @@ function App() {
     setBorrowers((currentBorrowers) => [...currentBorrowers, borrower])
   }
 
+  const removeBorrower = (borrowerId: string) => {
+    if (signedInRole !== 'admin') return
+    setBorrowers((currentBorrowers) => currentBorrowers.filter((borrower) =>
+      borrower.id !== borrowerId || borrower.loanAmount !== 0 || borrower.paydayInterest !== 0,
+    ))
+  }
+
   const addBorrowerInterest = (borrowerId: string) => {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
@@ -1549,6 +1662,25 @@ function App() {
       return {
         ...borrower,
         paydayInterest: Math.max(0, remainingInterest),
+        transactions: [...(borrower.transactions ?? []), nextTransaction],
+      }
+    }))
+  }
+
+  const payBorrowerPrincipal = (borrowerId: string, amount: number) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
+      if (borrower.id !== borrowerId || amount > borrower.loanAmount) return borrower
+      const remainingPrincipal = Number((borrower.loanAmount - amount).toFixed(2))
+      const nextTransaction = {
+        id: crypto.randomUUID(),
+        type: 'principal-payment' as const,
+        amount,
+        date: getLocalDate(),
+      }
+      return {
+        ...borrower,
+        loanAmount: Math.max(0, remainingPrincipal),
         transactions: [...(borrower.transactions ?? []), nextTransaction],
       }
     }))
@@ -1595,6 +1727,8 @@ function App() {
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
             onPayBorrowerInterest={payBorrowerInterest}
+            onPayBorrowerPrincipal={payBorrowerPrincipal}
+            onRemoveBorrower={removeBorrower}
           />
         )
       case 'profits':

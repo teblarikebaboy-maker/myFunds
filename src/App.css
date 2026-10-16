@@ -447,10 +447,37 @@ p {
   gap: 4px;
 }
 
+.borrower-directory-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.borrower-search {
+  width: min(240px, 45vw);
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.borrower-search::placeholder {
+  color: #94a3b8;
+}
+
+.borrower-search:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
 .borrower-list {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+  row-gap: 16px;
   padding: 0;
   margin: 0;
   list-style: none;
@@ -460,8 +487,9 @@ p {
   display: grid;
   gap: 8px;
   min-width: 0;
-  padding: 16px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.32);
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 12px;
 }
 
 .borrower-item-header {
@@ -481,6 +509,11 @@ p {
   padding: 0.5rem 0.8rem;
   font-size: 0.78rem;
   white-space: nowrap;
+}
+
+.borrower-interest-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .interest-payment-form {
@@ -546,8 +579,9 @@ p {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.5);
+  background: #1e293b;
   color: #e2e8f0;
   font-size: 0.78rem;
 }
@@ -1133,6 +1167,14 @@ p {
   gap: 0;
 }
 
+.loan-history-item {
+  margin-bottom: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.72);
+}
+
 .savings-history-empty {
   color: #94a3b8;
 }
@@ -1521,8 +1563,78 @@ p {
   border-color: rgba(100, 116, 139, 0.16);
 }
 
+.app-shell[data-theme='light'] .loan-history-item {
+  border-color: rgba(100, 116, 139, 0.16);
+  background: #f1f5f9;
+}
+
 .app-shell[data-theme='light'] .loan-transaction-date {
   color: #0e7490;
+}
+
+.app-shell[data-theme='light'] .borrower-item {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.app-shell[data-theme='light'] .borrower-search {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: #fff;
+  color: #1e293b;
+}
+
+.app-shell[data-theme='light'] .borrower-search::placeholder {
+  color: #64748b;
+}
+
+.app-shell[data-theme='light'] .interest-payment-form {
+  border-top-color: rgba(100, 116, 139, 0.2);
+  background: #f8fafc;
+}
+
+.app-shell[data-theme='light'] .interest-payment-form label,
+.app-shell[data-theme='light'] .loan-transactions small {
+  color: #475569;
+}
+
+.app-shell[data-theme='light'] .interest-payment-form input {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: #fff;
+  color: #1e293b;
+}
+
+.app-shell[data-theme='light'] .loan-transaction-item {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .loan-transaction-item strong {
+  color: #0f172a;
+}
+
+.app-shell[data-theme='light'] .loan-transaction-item span {
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .transaction-type.loan {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.app-shell[data-theme='light'] .transaction-type.interest {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.app-shell[data-theme='light'] .transaction-type.interest-payment,
+.app-shell[data-theme='light'] .transaction-type.principal-payment {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.app-shell[data-theme='light'] .loan-transactions-empty {
+  color: #64748b;
 }
 
 .app-shell[data-theme='light'] .divider,
@@ -1635,6 +1747,10 @@ p {
   .summary-grid,
   .card-grid,
   .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .borrower-list {
     grid-template-columns: 1fr;
   }
 

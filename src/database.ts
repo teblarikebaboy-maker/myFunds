@@ -21,7 +21,7 @@ export type DatabaseAccount = {
 }
 export type LoanTransaction = {
   id: string
-  type: 'loan' | 'interest' | 'interest-payment'
+  type: 'loan' | 'interest' | 'interest-payment' | 'principal-payment'
   amount: number
   date: string
 }
@@ -260,12 +260,17 @@ export const readWorkbookData = async (
         if (Array.isArray(parsedTransactions)) {
           transactions = parsedTransactions.filter((transaction): transaction is LoanTransaction => Boolean(transaction)
             && typeof transaction.id === 'string'
-            && (transaction.type === 'loan' || transaction.type === 'interest' || transaction.type === 'interest-payment')
+            && (transaction.type === 'loan'
+              || transaction.type === 'interest'
+              || transaction.type === 'interest-payment'
+              || transaction.type === 'principal-payment')
             && Number.isFinite(Number(transaction.amount))
             && typeof transaction.date === 'string')
             .map((transaction) => ({
               id: String(transaction.id),
-              type: transaction.type === 'interest' || transaction.type === 'interest-payment' ? transaction.type : 'loan',
+              type: transaction.type === 'interest'
+                || transaction.type === 'interest-payment'
+                || transaction.type === 'principal-payment' ? transaction.type : 'loan',
               amount: Number(transaction.amount),
               date: String(transaction.date),
             }))
