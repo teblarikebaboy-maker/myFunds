@@ -381,12 +381,39 @@ p {
 .loans-title {
   display: grid;
   grid-template-columns: max-content max-content;
-  align-items: end;
+  align-items: center;
   column-gap: 16px;
 }
 
 .loans-title .eyebrow {
   grid-column: 1 / -1;
+}
+
+.loan-proceeds-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 20px 24px;
+  border: 1px solid rgba(103, 232, 249, 0.22);
+  border-radius: 18px;
+  background: linear-gradient(110deg, rgba(8, 145, 178, 0.2), rgba(59, 130, 246, 0.1));
+}
+
+.loan-proceeds-panel span {
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.loan-proceeds-panel strong {
+  color: #a5f3fc;
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .loans-current-date {
@@ -492,27 +519,137 @@ p {
 
 .borrower-item {
   display: grid;
-  gap: 8px;
+  align-content: start;
+  gap: 14px;
   min-width: 0;
   padding: 16px;
   border: 1px solid rgba(148, 163, 184, 0.32);
   border-radius: 12px;
 }
 
-.borrower-item-header {
+.savings-directory-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  align-items: start;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.savings-directory-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: start;
+  align-items: start;
+  gap: 8px 12px;
+  min-width: 0;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.savings-directory-item > strong:first-child {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.savings-directory-item span {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.savings-directory-item > strong:nth-of-type(2) {
+  justify-self: end;
+  text-align: right;
+}
+
+.savings-member-transactions {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.savings-member-transactions h4 {
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.savings-member-transactions ul {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.savings-member-transactions li {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.savings-member-transactions li > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.savings-member-transactions li strong {
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.savings-member-transactions li small {
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.savings-member-transactions li > span {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.borrower-item-header {
+  display: grid;
   gap: 12px;
 }
 
+.borrower-item-header > strong {
+  overflow-wrap: anywhere;
+}
+
+.borrower-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
 .borrower-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .borrower-interest-button {
+  width: 100%;
+  min-width: 0;
   padding: 0.5rem 0.8rem;
   font-size: 0.78rem;
   white-space: nowrap;
@@ -1587,10 +1724,51 @@ p {
   color: #0e7490;
 }
 
+.app-shell[data-theme='light'] .loan-proceeds-panel {
+  border-color: rgba(14, 116, 144, 0.2);
+  background: linear-gradient(110deg, #ecfeff, #eff6ff);
+}
+
+.app-shell[data-theme='light'] .loan-proceeds-panel span {
+  color: #475569;
+}
+
+.app-shell[data-theme='light'] .loan-proceeds-panel strong {
+  color: #0e7490;
+}
+
 .app-shell[data-theme='light'] .borrower-item {
   border-color: rgba(100, 116, 139, 0.24);
   background: #fff;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.app-shell[data-theme='light'] .savings-directory-item {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.app-shell[data-theme='light'] .savings-directory-item span {
+  color: #64748b;
+}
+
+.app-shell[data-theme='light'] .savings-member-transactions {
+  border-top-color: rgba(100, 116, 139, 0.2);
+}
+
+.app-shell[data-theme='light'] .savings-member-transactions h4,
+.app-shell[data-theme='light'] .savings-member-transactions li strong {
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .savings-member-transactions li {
+  border-color: rgba(100, 116, 139, 0.16);
+  background: #f1f5f9;
+}
+
+.app-shell[data-theme='light'] .savings-member-transactions li small {
+  color: #64748b;
 }
 
 .app-shell[data-theme='light'] .borrower-search {
@@ -1766,6 +1944,10 @@ p {
   }
 
   .borrower-list {
+    grid-template-columns: 1fr;
+  }
+
+  .savings-directory-list {
     grid-template-columns: 1fr;
   }
 

@@ -21,10 +21,46 @@ import './App.css'
 
 type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data'
 type ChartStyle = 'bar' | 'line'
+type SavingsTransaction = {
+  id: string
+  member: string
+  type: string
+  amount: number
+  date: string
+  reason?: string
+  fee?: number
+}
+
 const getMemberSavings = (member: Member) =>
   member.initialSavings
   + member.contributions.reduce((total, contribution) => total + contribution.amount, 0)
   - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
+
+const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
+  {
+    id: `${member.name}-initial`,
+    member: member.name,
+    type: 'Initial savings',
+    amount: member.initialSavings,
+    date: member.initialSavingsDate,
+  },
+  ...member.contributions.map((contribution, index) => ({
+    id: `${member.name}-contribution-${index}`,
+    member: member.name,
+    type: 'Added savings',
+    amount: contribution.amount,
+    date: contribution.date,
+  })),
+  ...member.withdrawals.map((withdrawal, index) => ({
+    id: `${member.name}-withdrawal-${index}`,
+    member: member.name,
+    type: 'Pull out savings',
+    amount: -withdrawal.amount,
+    date: withdrawal.date,
+    reason: withdrawal.reason,
+    fee: withdrawal.amount * 0.1,
+  })),
+].sort((first, second) => second.date.localeCompare(first.date))
 
 const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[]) => {
   const members = currentMembers.map((member) => ({ ...member }))
@@ -168,7 +204,7 @@ const formatDate = (date: string) =>
 
 const currentYear = new Date().getFullYear()
 
-function OverviewPage({ totalSavings }: { totalSavings: number }) {
+function OverviewPage({ totalSavings, totalLoanProceeds }: { totalSavings: number; totalLoanProceeds: number }) {
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar')
   const [isChartStyleMenuOpen, setIsChartStyleMenuOpen] = useState(false)
   const currentBudget = budgetCategories.reduce((sum, item) => sum + item.spent, 0)
@@ -190,7 +226,13 @@ function OverviewPage({ totalSavings }: { totalSavings: number }) {
         {summaryCards.map((card) => (
           <article key={card.label} className="summary-card">
             <p>{card.label}</p>
-            <h2>{card.label === 'Total Savings' ? formatCurrency(totalSavings) : card.value}</h2>
+            <h2>
+              {card.label === 'Available funds'
+                ? formatCurrency(totalSavings - totalLoanProceeds)
+                : card.label === 'Total Savings'
+                  ? formatCurrency(totalSavings)
+                  : card.label === 'Loans Proceeds' ? formatCurrency(totalLoanProceeds) : card.value}
+            </h2>
             <span className={card.tone}>{card.delta}</span>
           </article>
         ))}
@@ -453,6 +495,10 @@ function SavingsPage({
   const [withdrawalDate, setWithdrawalDate] = useState(getLocalDate)
   const [withdrawalReason, setWithdrawalReason] = useState('')
   const [withdrawalError, setWithdrawalError] = useState('')
+  const [memberSearch, setMemberSearch] = useState('')
+  const filteredMembers = members.filter((member) =>
+    member.name.toLowerCase().includes(memberSearch.trim().toLowerCase()),
+  )
   const selectedWithdrawalMember = members.find((member) =>
     member.name === (withdrawalMember || (selectedMember !== 'all' ? selectedMember : '')),
   )
@@ -529,41 +575,9 @@ function SavingsPage({
     .reduce((total, member) => total + getMemberSavings(member), 0)
   const selectedMemberDetails = members.find((member) => member.name === selectedMember)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
-  const savingsHistory: Array<{
-    id: string
-    member: string
-    type: string
-    amount: number
-    date: string
-    reason?: string
-    fee?: number
-  }> = members
+  const savingsHistory: SavingsTransaction[] = members
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
-    .flatMap((member) => [
-      {
-        id: `${member.name}-initial`,
-        member: member.name,
-        type: 'Initial savings',
-        amount: member.initialSavings,
-        date: member.initialSavingsDate,
-      },
-      ...member.contributions.map((contribution, index) => ({
-        id: `${member.name}-contribution-${index}`,
-        member: member.name,
-        type: 'Added savings',
-        amount: contribution.amount,
-        date: contribution.date,
-      })),
-      ...member.withdrawals.map((withdrawal, index) => ({
-        id: `${member.name}-withdrawal-${index}`,
-        member: member.name,
-        type: 'Pull out savings',
-        amount: -withdrawal.amount,
-        date: withdrawal.date,
-        reason: withdrawal.reason,
-        fee: withdrawal.amount * 0.1,
-      })),
-    ])
+    .flatMap(getMemberSavingsTransactions)
     .sort((first, second) => second.date.localeCompare(first.date))
 
   return (
@@ -766,6 +780,62 @@ function SavingsPage({
         </article>}
       </section>
 
+      <section className="panel full-width-panel savings-directory-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Savings</p>
+            <h3>Member directory</h3>
+          </div>
+          <div className="borrower-directory-controls">
+            <input
+              className="borrower-search"
+              type="search"
+              aria-label="Search members"
+              value={memberSearch}
+              onChange={(event) => setMemberSearch(event.target.value)}
+              placeholder="Search members"
+            />
+            <span className="meta-pill">{members.length} total</span>
+          </div>
+        </div>
+        {members.length > 0 ? (
+          filteredMembers.length > 0 ? (
+            <ul className="savings-directory-list">
+              {filteredMembers.map((member) => (
+                <li key={member.name} className="savings-directory-item">
+                  <strong>{member.name}</strong>
+                  <span>Current savings</span>
+                  <strong>{formatCurrency(getMemberSavings(member))}</strong>
+                  <div className="savings-member-transactions">
+                    <h4>Savings transactions</h4>
+                    <ul>
+                      {getMemberSavingsTransactions(member).map((transaction) => (
+                        <li key={transaction.id}>
+                          <div>
+                            <strong>{transaction.type}</strong>
+                            <small>
+                              {formatDate(transaction.date)}
+                              {transaction.reason && ` · ${transaction.reason}`}
+                            </small>
+                          </div>
+                          <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                            {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No members match “{memberSearch}”.</p>
+          )
+        ) : (
+          <p className="savings-history-empty">No registered members yet.</p>
+        )}
+      </section>
+
       <section className="panel full-width-panel">
         <div className="panel-header">
           <div>
@@ -828,6 +898,7 @@ function LoansPage({
   const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
+  const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
     borrower.name.toLowerCase().includes(borrowerSearch.trim().toLowerCase()),
   )
@@ -944,6 +1015,11 @@ function LoansPage({
             {isAddingBorrower ? 'Cancel' : 'Add borrower'}
           </button>
         </div>
+      </section>
+
+      <section className="panel full-width-panel loan-proceeds-panel">
+        <span>Total loan proceeds</span>
+        <strong>{formatCurrency(totalLoanProceeds)}</strong>
       </section>
 
       {isAddingBorrower && (
@@ -1393,6 +1469,7 @@ function App() {
   const initialAccounts = useRef(accounts)
   const initialBorrowers = useRef(borrowers)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const registeredGuarantors = accounts
     .flatMap((account) => {
       const email = account.email.trim().toLowerCase()
@@ -1722,7 +1799,9 @@ function App() {
 
   const renderPage = () => {
     if (signedInRole !== 'admin') {
-      if (activeTab === 'overview') return <OverviewPage totalSavings={totalSavings} />
+      if (activeTab === 'overview') {
+        return <OverviewPage totalSavings={totalSavings} totalLoanProceeds={totalLoanProceeds} />
+      }
       if (activeTab === 'savings') {
         return (
           <SavingsPage
@@ -1779,7 +1858,7 @@ function App() {
         )
       case 'overview':
       default:
-        return <OverviewPage totalSavings={totalSavings} />
+        return <OverviewPage totalSavings={totalSavings} totalLoanProceeds={totalLoanProceeds} />
     }
   }
 
