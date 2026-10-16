@@ -552,6 +552,11 @@ p {
   font-size: 0.78rem;
 }
 
+.loan-transaction-date {
+  color: #67e8f9;
+  text-align: right;
+}
+
 .transaction-type {
   display: inline-flex;
   align-items: center;
@@ -1514,6 +1519,10 @@ p {
 .app-shell[data-theme='light'] .transaction-item,
 .app-shell[data-theme='light'] .bill-item {
   border-color: rgba(100, 116, 139, 0.16);
+}
+
+.app-shell[data-theme='light'] .loan-transaction-date {
+  color: #0e7490;
 }
 
 .app-shell[data-theme='light'] .divider,

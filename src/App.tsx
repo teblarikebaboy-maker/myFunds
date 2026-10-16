@@ -1025,7 +1025,7 @@ function LoansPage({
                             {transaction.type === 'interest-payment' ? 'Interest paid' : transaction.type === 'interest' ? 'Interest' : 'Loan'}
                           </span>
                           <strong>{transaction.type === 'interest-payment' ? '-' : ''}{formatCurrency(transaction.amount)}</strong>
-                          <time>{formatDate(transaction.date)}</time>
+                          <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
                         </li>
                       ))}
                     </ul>
