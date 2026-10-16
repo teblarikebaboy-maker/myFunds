@@ -899,6 +899,12 @@ function LoansPage({
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const totalReceivedInterest = borrowers.reduce((total, borrower) =>
+    total + (borrower.transactions ?? [])
+      .filter((transaction) => transaction.type === 'interest-payment')
+      .reduce((borrowerTotal, transaction) => borrowerTotal + transaction.amount, 0),
+  0)
+  const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
     borrower.name.toLowerCase().includes(borrowerSearch.trim().toLowerCase()),
   )
@@ -1020,6 +1026,16 @@ function LoansPage({
       <section className="panel full-width-panel loan-proceeds-panel">
         <span>Total loan proceeds</span>
         <strong>{formatCurrency(totalLoanProceeds)}</strong>
+      </section>
+
+      <section className="panel full-width-panel loan-proceeds-panel loan-interest-panel">
+        <span>Total received interest</span>
+        <strong>{formatCurrency(totalReceivedInterest)}</strong>
+      </section>
+
+      <section className="panel full-width-panel loan-proceeds-panel loan-receivable-interest-panel">
+        <span>Total receivable interest</span>
+        <strong>{formatCurrency(totalReceivableInterest)}</strong>
       </section>
 
       {isAddingBorrower && (

@@ -416,6 +416,26 @@ p {
   white-space: nowrap;
 }
 
+.loan-interest-panel {
+  margin-top: -8px;
+  border-color: rgba(52, 211, 153, 0.24);
+  background: linear-gradient(110deg, rgba(5, 150, 105, 0.18), rgba(16, 185, 129, 0.08));
+}
+
+.loan-interest-panel strong {
+  color: #6ee7b7;
+}
+
+.loan-receivable-interest-panel {
+  margin-top: -8px;
+  border-color: rgba(196, 181, 253, 0.24);
+  background: linear-gradient(110deg, rgba(109, 40, 217, 0.18), rgba(79, 70, 229, 0.08));
+}
+
+.loan-receivable-interest-panel strong {
+  color: #c4b5fd;
+}
+
 .loans-current-date {
   justify-self: center;
   color: #67e8f9;
@@ -1735,6 +1755,24 @@ p {
 
 .app-shell[data-theme='light'] .loan-proceeds-panel strong {
   color: #0e7490;
+}
+
+.app-shell[data-theme='light'] .loan-interest-panel {
+  border-color: rgba(5, 150, 105, 0.2);
+  background: linear-gradient(110deg, #ecfdf5, #f0fdfa);
+}
+
+.app-shell[data-theme='light'] .loan-interest-panel strong {
+  color: #047857;
+}
+
+.app-shell[data-theme='light'] .loan-receivable-interest-panel {
+  border-color: rgba(109, 40, 217, 0.18);
+  background: linear-gradient(110deg, #f5f3ff, #eef2ff);
+}
+
+.app-shell[data-theme='light'] .loan-receivable-interest-panel strong {
+  color: #6d28d9;
 }
 
 .app-shell[data-theme='light'] .borrower-item {
