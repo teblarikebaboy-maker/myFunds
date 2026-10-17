@@ -586,6 +586,69 @@ p {
   text-align: right;
 }
 
+.savings-member-header {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.savings-member-header > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.delete-member-button {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0.55rem 0.8rem;
+}
+
+.delete-member-form {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 12px;
+  background: rgba(127, 29, 29, 0.16);
+}
+
+.delete-member-form p {
+  margin: 0;
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
+.delete-member-form label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.delete-member-form input {
+  min-width: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.delete-member-form button {
+  justify-self: start;
+}
+
+.delete-member-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .savings-member-transactions {
   display: grid;
   grid-column: 1 / -1;
@@ -1844,6 +1907,25 @@ p {
 
 .app-shell[data-theme='light'] .savings-directory-item span {
   color: #64748b;
+}
+
+.app-shell[data-theme='light'] .delete-member-form {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: #fff1f2;
+}
+
+.app-shell[data-theme='light'] .delete-member-form p {
+  color: #9f1239;
+}
+
+.app-shell[data-theme='light'] .delete-member-form label {
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .delete-member-form input {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  color: #0f172a;
 }
 
 .app-shell[data-theme='light'] .savings-member-transactions {

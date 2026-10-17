@@ -21,7 +21,7 @@ export type DatabaseAccount = {
 }
 export type LoanTransaction = {
   id: string
-  type: 'loan' | 'interest' | 'interest-payment' | 'principal-payment'
+  type: 'loan' | 'interest' | 'interest-payment' | 'principal-payment' | 'principal-addition'
   amount: number
   date: string
 }
@@ -145,7 +145,8 @@ const parseLoanTransactions = (value: string): LoanTransaction[] => {
       && (transaction.type === 'loan'
         || transaction.type === 'interest'
         || transaction.type === 'interest-payment'
-        || transaction.type === 'principal-payment')
+        || transaction.type === 'principal-payment'
+        || transaction.type === 'principal-addition')
       && Number.isFinite(Number(transaction.amount))
       && typeof transaction.date === 'string')
       .map((transaction) => ({
@@ -313,7 +314,7 @@ export const readWorkbookData = async (
     const type = String(row.getCell(4).value ?? '').trim()
     const amount = Number(row.getCell(5).value)
     const date = getCellDate(row.getCell(6).value)
-    if (!borrower || !id || !['loan', 'interest', 'interest-payment', 'principal-payment'].includes(type)
+    if (!borrower || !id || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition'].includes(type)
       || !Number.isFinite(amount) || !date) return
     borrower.transactions.push({
       id,
@@ -333,7 +334,7 @@ export const readWorkbookData = async (
     const amount = Number(row.getCell(5).value)
     const date = getCellDate(row.getCell(6).value)
     if (!borrowerId || !borrowerName || !id
-      || !['loan', 'interest', 'interest-payment', 'principal-payment'].includes(type)
+      || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition'].includes(type)
       || !Number.isFinite(amount) || !date) return
     removedBorrowerTransactions.push({
       borrowerId,

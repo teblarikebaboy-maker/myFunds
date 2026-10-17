@@ -109,7 +109,7 @@ const summaryCards = [
   { label: 'Available funds', value: '₱32,480', delta: '+₱1,240', tone: 'positive' },
   { label: 'Total Savings', value: '₱8,420', delta: '+8.4%', tone: 'positive' },
   { label: 'Loans Proceeds', value: '₱5,420', delta: '-3.1%', tone: 'negative' },
-  { label: 'Total Profits', value: '36%', delta: '+4.6 pts', tone: 'positive' },
+  { label: 'Total Profits', value: '₱0.00', delta: 'Interest paid', tone: 'positive' },
 ]
 
 const spendingTrend = [
@@ -203,6 +203,16 @@ const formatBorrowerCurrency = (amount: number) =>
 
 const hasOutstandingBorrowerBalance = (amount: number) => Math.round(amount * 100) !== 0
 
+const getTotalInterestPaid = (borrowers: Borrower[], removedTransactions: RemovedBorrowerTransaction[]) =>
+  borrowers.reduce((total, borrower) =>
+    total + (borrower.transactions ?? [])
+      .filter((transaction) => transaction.type === 'interest-payment')
+      .reduce((borrowerTotal, transaction) => borrowerTotal + transaction.amount, 0),
+  0)
+  + removedTransactions.reduce((total, { transaction }) =>
+    total + (transaction.type === 'interest-payment' ? transaction.amount : 0),
+  0)
+
 const getLocalDate = () => {
   const date = new Date()
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
@@ -215,7 +225,15 @@ const formatDate = (date: string) =>
 
 const currentYear = new Date().getFullYear()
 
-function OverviewPage({ totalSavings, totalLoanProceeds }: { totalSavings: number; totalLoanProceeds: number }) {
+function OverviewPage({
+  totalSavings,
+  totalLoanProceeds,
+  totalInterestPaid,
+}: {
+  totalSavings: number
+  totalLoanProceeds: number
+  totalInterestPaid: number
+}) {
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar')
   const [isChartStyleMenuOpen, setIsChartStyleMenuOpen] = useState(false)
   const currentBudget = budgetCategories.reduce((sum, item) => sum + item.spent, 0)
@@ -242,7 +260,11 @@ function OverviewPage({ totalSavings, totalLoanProceeds }: { totalSavings: numbe
                 ? formatCurrency(totalSavings - totalLoanProceeds)
                 : card.label === 'Total Savings'
                   ? formatCurrency(totalSavings)
-                  : card.label === 'Loans Proceeds' ? formatCurrency(totalLoanProceeds) : card.value}
+                  : card.label === 'Loans Proceeds'
+                    ? formatCurrency(totalLoanProceeds)
+                    : card.label === 'Total Profits'
+                      ? formatCurrency(totalInterestPaid)
+                      : card.value}
             </h2>
             <span className={card.tone}>{card.delta}</span>
           </article>
@@ -478,6 +500,7 @@ function OverviewPage({ totalSavings, totalLoanProceeds }: { totalSavings: numbe
 
 type SavingsPageProps = {
   members: Member[]
+  borrowers: Borrower[]
   selectedMember: string
   isAdmin: boolean
   canEditSavings: boolean
@@ -485,10 +508,12 @@ type SavingsPageProps = {
   onMemberChange: (member: string) => void
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
+  onDeleteMember: (memberName: string, adminPassword: string) => Promise<{ success: boolean; message?: string }>
 }
 
 function SavingsPage({
   members,
+  borrowers,
   selectedMember,
   isAdmin,
   canEditSavings,
@@ -496,6 +521,7 @@ function SavingsPage({
   onMemberChange,
   onAddSavings,
   onPullOutSavings,
+  onDeleteMember,
 }: SavingsPageProps) {
   const [savingsMember, setSavingsMember] = useState('')
   const [savingsAmount, setSavingsAmount] = useState('')
@@ -507,6 +533,10 @@ function SavingsPage({
   const [withdrawalReason, setWithdrawalReason] = useState('')
   const [withdrawalError, setWithdrawalError] = useState('')
   const [memberSearch, setMemberSearch] = useState('')
+  const [deletingMemberName, setDeletingMemberName] = useState<string | null>(null)
+  const [deleteAdminPassword, setDeleteAdminPassword] = useState('')
+  const [deleteMemberError, setDeleteMemberError] = useState('')
+  const [isDeletingMember, setIsDeletingMember] = useState(false)
   const filteredMembers = members.filter((member) =>
     member.name.toLowerCase().includes(memberSearch.trim().toLowerCase()),
   )
@@ -579,6 +609,26 @@ function SavingsPage({
     setWithdrawalDate(getLocalDate())
     setWithdrawalReason('')
     setWithdrawalError('')
+  }
+
+  const handleDeleteMember = async (event: FormEvent<HTMLFormElement>, memberName: string) => {
+    event.preventDefault()
+    setIsDeletingMember(true)
+    setDeleteMemberError('')
+    try {
+      const result = await onDeleteMember(memberName, deleteAdminPassword)
+      if (!result.success) {
+        setDeleteMemberError(result.message ?? 'The member could not be deleted.')
+        return
+      }
+      setDeletingMemberName(null)
+      setDeleteAdminPassword('')
+      setDeleteMemberError('')
+    } catch (error) {
+      setDeleteMemberError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsDeletingMember(false)
+    }
   }
 
   const displayedInitialSavings = members
@@ -814,9 +864,55 @@ function SavingsPage({
             <ul className="savings-directory-list">
               {filteredMembers.map((member) => (
                 <li key={member.name} className="savings-directory-item">
-                  <strong>{member.name}</strong>
+                  <div className="savings-member-header">
+                    <strong>{member.name}</strong>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="secondary-button delete-member-button"
+                        onClick={() => {
+                          setDeletingMemberName((currentName) => currentName === member.name ? null : member.name)
+                          setDeleteAdminPassword('')
+                          setDeleteMemberError('')
+                        }}
+                      >
+                        {deletingMemberName === member.name ? 'Cancel' : 'Delete'}
+                      </button>
+                    )}
+                  </div>
                   <span>Current savings</span>
                   <strong>{formatCurrency(getMemberSavings(member))}</strong>
+                  <span>Amount guaranteed</span>
+                  <strong>{formatCurrency(borrowers
+                    .filter((borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase())
+                    .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
+                  {isAdmin && deletingMemberName === member.name && (
+                    <form
+                      className="delete-member-form"
+                      noValidate
+                      onSubmit={(event) => void handleDeleteMember(event, member.name)}
+                    >
+                      <p>This permanently deletes the member’s login account and savings history.</p>
+                      <label>
+                        Confirm with your admin password
+                        <input
+                          autoFocus
+                          type="password"
+                          required
+                          autoComplete="current-password"
+                          value={deleteAdminPassword}
+                          onChange={(event) => {
+                            setDeleteAdminPassword(event.target.value)
+                            setDeleteMemberError('')
+                          }}
+                        />
+                      </label>
+                      <button type="submit" className="secondary-button" disabled={isDeletingMember}>
+                        {isDeletingMember ? 'Deleting…' : 'Confirm delete'}
+                      </button>
+                      {deleteMemberError && <p className="member-error" role="alert">{deleteMemberError}</p>}
+                    </form>
+                  )}
                   <div className="savings-member-transactions">
                     <h4>Savings transactions</h4>
                     <ul>
@@ -887,7 +983,9 @@ function LoansPage({
   onAddBorrowerInterest,
   onPayBorrowerInterest,
   onPayBorrowerPrincipal,
+  onAddBorrowerPrincipal,
   onRemoveBorrower,
+  totalInterestPaid,
 }: {
   borrowers: Borrower[]
   guarantors: string[]
@@ -895,7 +993,9 @@ function LoansPage({
   onAddBorrowerInterest: (borrowerId: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number) => void
   onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
+  onAddBorrowerPrincipal: (borrowerId: string, amount: number) => void
   onRemoveBorrower: (borrowerId: string) => void
+  totalInterestPaid: number
 }) {
   const [isAddingBorrower, setIsAddingBorrower] = useState(false)
   const [borrowerName, setBorrowerName] = useState('')
@@ -908,13 +1008,11 @@ function LoansPage({
   const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
+  const [addingPrincipalBorrowerId, setAddingPrincipalBorrowerId] = useState<string | null>(null)
+  const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
+  const [principalAdditionError, setPrincipalAdditionError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
-  const totalReceivedInterest = borrowers.reduce((total, borrower) =>
-    total + (borrower.transactions ?? [])
-      .filter((transaction) => transaction.type === 'interest-payment')
-      .reduce((borrowerTotal, transaction) => borrowerTotal + transaction.amount, 0),
-  0)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
     borrower.name.toLowerCase().includes(borrowerSearch.trim().toLowerCase()),
@@ -1014,6 +1112,25 @@ function LoansPage({
     setPrincipalPaymentError('')
   }
 
+  const handleAddBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    const amount = Number(principalAdditionAmount)
+    if (principalAdditionAmount === '' || !Number.isFinite(amount) || amount <= 0) {
+      setPrincipalAdditionError('Enter an amount greater than zero.')
+      return
+    }
+    const roundedAmount = Number(amount.toFixed(2))
+    if (roundedAmount <= 0) {
+      setPrincipalAdditionError('Enter an amount of at least 0.01.')
+      return
+    }
+
+    onAddBorrowerPrincipal(borrower.id, roundedAmount)
+    setAddingPrincipalBorrowerId(null)
+    setPrincipalAdditionAmount('')
+    setPrincipalAdditionError('')
+  }
+
   return (
     <main className="page-view">
       <section className="page-header loans-page-header">
@@ -1036,7 +1153,7 @@ function LoansPage({
 
       <section className="panel full-width-panel loan-proceeds-panel loan-interest-panel">
         <span>Total received interest</span>
-        <strong>{formatCurrency(totalReceivedInterest)}</strong>
+        <strong>{formatCurrency(totalInterestPaid)}</strong>
       </section>
 
       <section className="panel full-width-panel loan-proceeds-panel loan-receivable-interest-panel">
@@ -1151,6 +1268,19 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
+                      onClick={() => {
+                        setAddingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
+                        setPrincipalAdditionAmount('')
+                        setPrincipalAdditionError('')
+                        setPayingPrincipalBorrowerId(null)
+                        setPayingBorrowerId(null)
+                      }}
+                    >
+                      Add principal
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button borrower-interest-button"
                       disabled={borrower.paydayInterest <= 0}
                       onClick={() => {
                         setPayingBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
@@ -1248,6 +1378,41 @@ function LoansPage({
                     {principalPaymentError && <p className="member-error" role="alert">{principalPaymentError}</p>}
                   </form>
                 )}
+                {addingPrincipalBorrowerId === borrower.id && (
+                  <form
+                    className="interest-payment-form"
+                    noValidate
+                    onSubmit={(event) => handleAddBorrowerPrincipal(event, borrower)}
+                  >
+                    <label>
+                      Amount to add
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        required
+                        value={principalAdditionAmount}
+                        onChange={(event) => {
+                          setPrincipalAdditionAmount(event.target.value)
+                          setPrincipalAdditionError('')
+                        }}
+                        placeholder="0"
+                      />
+                    </label>
+                    <button type="submit" className="primary-button">Add principal</button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setAddingPrincipalBorrowerId(null)
+                        setPrincipalAdditionError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {principalAdditionError && <p className="member-error" role="alert">{principalAdditionError}</p>}
+                  </form>
+                )}
                 <div className="loan-transactions">
                   <small>Loan transactions</small>
                   {borrower.transactions && borrower.transactions.length > 0 ? (
@@ -1259,7 +1424,9 @@ function LoansPage({
                               ? 'Interest paid'
                               : transaction.type === 'principal-payment'
                                 ? 'Principal paid'
-                                : transaction.type === 'interest' ? 'Interest' : 'Loan'}
+                                : transaction.type === 'principal-addition'
+                                  ? 'Principal added'
+                                  : transaction.type === 'interest' ? 'Interest' : 'Loan'}
                           </span>
                           <strong>{transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}{formatBorrowerCurrency(transaction.amount)}</strong>
                           <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
@@ -1298,7 +1465,9 @@ function LoansPage({
                       ? 'Interest paid'
                       : transaction.type === 'principal-payment'
                         ? 'Principal paid'
-                        : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
+                        : transaction.type === 'principal-addition'
+                          ? 'Principal added'
+                          : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
                     {' · '}{transaction.borrowerName}
                   </strong>
                   <small>{formatDate(transaction.date)}</small>
@@ -1318,7 +1487,7 @@ function LoansPage({
   )
 }
 
-function ProfitsPage() {
+function ProfitsPage({ totalInterestPaid }: { totalInterestPaid: number }) {
   return (
     <main className="page-view">
       <section className="page-header">
@@ -1332,7 +1501,7 @@ function ProfitsPage() {
         {profitsData.map((item) => (
           <article key={item.label} className="summary-card">
             <p>{item.label}</p>
-            <h2>{item.value}</h2>
+            <h2>{item.label === 'Net profit' ? formatCurrency(totalInterestPaid) : item.value}</h2>
             <span className={item.tone}>vs last month</span>
           </article>
         ))}
@@ -1494,6 +1663,7 @@ function App() {
   const initialRemovedBorrowerTransactions = useRef(removedBorrowerTransactions)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
   const registeredGuarantors = accounts
     .flatMap((account) => {
       const email = account.email.trim().toLowerCase()
@@ -1758,6 +1928,44 @@ function App() {
     )
   }
 
+  const deleteSavingsMember = async (memberName: string, adminPassword: string) => {
+    if (signedInRole !== 'admin') {
+      return { success: false, message: 'Only an admin can delete a member.' }
+    }
+    const memberToDelete = members.find((member) => member.name === memberName)
+    if (!memberToDelete) {
+      return { success: false, message: 'This member is no longer in the directory.' }
+    }
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      return { success: false, message: 'The logged-in admin account could not be verified.' }
+    }
+    if (!(await verifyPassword(adminPassword, adminAccount))) {
+      return { success: false, message: 'The admin password is incorrect.' }
+    }
+
+    const memberEmail = memberToDelete.accountEmail?.trim().toLowerCase()
+    const linkedAccount = accounts.find((account) => memberEmail
+      ? account.email.trim().toLowerCase() === memberEmail
+      : account.name.trim().toLowerCase() === memberToDelete.name.trim().toLowerCase(),
+    )
+    if (linkedAccount?.email.trim().toLowerCase() === adminAccount.email.trim().toLowerCase()) {
+      return { success: false, message: 'You cannot delete the currently signed-in admin account.' }
+    }
+
+    setMembers((currentMembers) => currentMembers.filter((member) => member.name !== memberName))
+    if (linkedAccount) {
+      setAccounts((currentAccounts) => currentAccounts.filter((account) =>
+        account.email.trim().toLowerCase() !== linkedAccount.email.trim().toLowerCase(),
+      ))
+    }
+    if (selectedMember === memberName) setSelectedMember('all')
+    return { success: true }
+  }
+
   const addBorrower = (borrower: Borrower) => {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => [...currentBorrowers, borrower])
@@ -1842,15 +2050,40 @@ function App() {
     }))
   }
 
+  const addBorrowerPrincipal = (borrowerId: string, amount: number) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
+      if (borrower.id !== borrowerId) return borrower
+      const updatedLoanAmount = Number((borrower.loanAmount + amount).toFixed(2))
+      if (!Number.isFinite(updatedLoanAmount)) return borrower
+      const nextTransaction = {
+        id: crypto.randomUUID(),
+        type: 'principal-addition' as const,
+        amount,
+        date: getLocalDate(),
+      }
+      return {
+        ...borrower,
+        loanAmount: updatedLoanAmount,
+        transactions: [...(borrower.transactions ?? []), nextTransaction],
+      }
+    }))
+  }
+
   const renderPage = () => {
     if (signedInRole !== 'admin') {
       if (activeTab === 'overview') {
-        return <OverviewPage totalSavings={totalSavings} totalLoanProceeds={totalLoanProceeds} />
+        return <OverviewPage
+          totalSavings={totalSavings}
+          totalLoanProceeds={totalLoanProceeds}
+          totalInterestPaid={totalInterestPaid}
+        />
       }
       if (activeTab === 'savings') {
         return (
           <SavingsPage
             members={signedInMember ? [signedInMember] : []}
+            borrowers={borrowers}
             selectedMember={signedInMember?.name ?? ''}
             isAdmin={false}
             canEditSavings={Boolean(signedInMember)}
@@ -1858,6 +2091,7 @@ function App() {
             onMemberChange={() => undefined}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onDeleteMember={deleteSavingsMember}
           />
         )
       }
@@ -1869,6 +2103,7 @@ function App() {
         return (
           <SavingsPage
             members={members}
+            borrowers={borrowers}
             selectedMember={selectedMember}
             overallSavings={totalSavings}
             isAdmin
@@ -1876,6 +2111,7 @@ function App() {
             onMemberChange={setSelectedMember}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onDeleteMember={deleteSavingsMember}
           />
         )
       case 'loans':
@@ -1887,11 +2123,13 @@ function App() {
             onAddBorrowerInterest={addBorrowerInterest}
             onPayBorrowerInterest={payBorrowerInterest}
             onPayBorrowerPrincipal={payBorrowerPrincipal}
+            onAddBorrowerPrincipal={addBorrowerPrincipal}
             onRemoveBorrower={removeBorrower}
+            totalInterestPaid={totalInterestPaid}
           />
         )
       case 'profits':
-        return <ProfitsPage />
+        return <ProfitsPage totalInterestPaid={totalInterestPaid} />
       case 'data':
         return (
           <DataPage
@@ -1903,7 +2141,11 @@ function App() {
         )
       case 'overview':
       default:
-        return <OverviewPage totalSavings={totalSavings} totalLoanProceeds={totalLoanProceeds} />
+        return <OverviewPage
+          totalSavings={totalSavings}
+          totalLoanProceeds={totalLoanProceeds}
+          totalInterestPaid={totalInterestPaid}
+        />
     }
   }
 
