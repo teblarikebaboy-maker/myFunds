@@ -1560,6 +1560,38 @@ p {
   background: #f8fafc;
 }
 
+.login-overlay[data-theme='light'] .login-database-setup {
+  border-color: rgba(100, 116, 139, 0.2);
+  background: #f1f5f9;
+}
+
+.login-overlay[data-theme='light'] .secondary-button {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  color: #334155;
+}
+
+.login-overlay[data-theme='light'] .secondary-button:hover:not(:disabled) {
+  border-color: rgba(14, 116, 144, 0.35);
+  background: #ecfeff;
+}
+
+.login-overlay[data-theme='light'] .primary-button,
+.app-shell[data-theme='light'] .primary-button {
+  background: linear-gradient(135deg, #0284c7, #0f766e);
+  color: #fff;
+  box-shadow: 0 10px 22px rgba(14, 116, 144, 0.2);
+}
+
+.login-overlay[data-theme='light'] .login-close-button {
+  border-color: rgba(100, 116, 139, 0.24);
+  color: #475569;
+}
+
+.login-overlay[data-theme='light'] .login-close-button:hover {
+  background: #f1f5f9;
+}
+
 .app-shell[data-theme='light'] .login-form label,
 .login-overlay[data-theme='light'] .login-form label {
   color: #475569;
@@ -1576,6 +1608,12 @@ p {
   border-color: rgba(100, 116, 139, 0.24);
   background: #f8fafc;
   color: #1e293b;
+}
+
+.login-overlay[data-theme='light'] .login-form input:focus-visible,
+.login-overlay[data-theme='light'] .login-form select:focus-visible,
+.login-overlay[data-theme='light'] .login-close-button:focus-visible {
+  outline-color: #0e7490;
 }
 
 .account-role.admin {
@@ -1678,11 +1716,6 @@ p {
 .app-shell[data-theme='light'] .transaction-item .negative,
 .app-shell[data-theme='light'] .member-error {
   color: #be123c;
-}
-
-.app-shell[data-theme='light'] .primary-button {
-  background: linear-gradient(135deg, #0369a1, #6d28d9);
-  color: #fff;
 }
 
 .app-shell[data-theme='light'] .summary-card p,
