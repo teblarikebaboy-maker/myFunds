@@ -25,6 +25,11 @@ export type LoanTransaction = {
   amount: number
   date: string
 }
+export type RemovedBorrowerTransaction = {
+  borrowerId: string
+  borrowerName: string
+  transaction: LoanTransaction
+}
 
 export type Borrower = {
   id: string
@@ -130,6 +135,30 @@ const getCellNumber = (value: ExcelJS.CellValue, context: string): number => {
   return amount
 }
 
+const parseLoanTransactions = (value: string): LoanTransaction[] => {
+  if (!value) return []
+  try {
+    const parsedTransactions: unknown = JSON.parse(value)
+    if (!Array.isArray(parsedTransactions)) return []
+    return parsedTransactions.filter((transaction): transaction is LoanTransaction => Boolean(transaction)
+      && typeof transaction.id === 'string'
+      && (transaction.type === 'loan'
+        || transaction.type === 'interest'
+        || transaction.type === 'interest-payment'
+        || transaction.type === 'principal-payment')
+      && Number.isFinite(Number(transaction.amount))
+      && typeof transaction.date === 'string')
+      .map((transaction) => ({
+        id: transaction.id,
+        type: transaction.type,
+        amount: Number(transaction.amount),
+        date: transaction.date,
+      }))
+  } catch {
+    return []
+  }
+}
+
 const bytesToHex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 
@@ -165,7 +194,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -238,13 +267,21 @@ export const readWorkbookData = async (
   })
 
   const borrowers: Borrower[] = []
-  workbook.getWorksheet('Borrowers')?.eachRow((row, rowNumber) => {
+  const borrowersSheet = workbook.getWorksheet('Borrowers')
+  const borrowerHeaders = new Map<string, number>()
+  borrowersSheet?.getRow(1).eachCell((cell, columnNumber) => {
+    borrowerHeaders.set(String(cell.value ?? '').trim(), columnNumber)
+  })
+  const getBorrowerCell = (row: ExcelJS.Row, header: string, fallbackColumn: number) =>
+    row.getCell(borrowerHeaders.get(header) ?? fallbackColumn).value
+  const legacyTransactionsColumn = borrowerHeaders.get('Loan Transactions (JSON)')
+  borrowersSheet?.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return
-    const id = String(row.getCell(1).value ?? '').trim()
-    const name = String(row.getCell(2).value ?? '').trim()
+    const id = String(getBorrowerCell(row, 'ID', 1) ?? '').trim()
+    const name = String(getBorrowerCell(row, 'Name', 2) ?? '').trim()
     if (!id || !name) return
-    const loanAmount = Number(row.getCell(6).value) || 0
-    const paydayInterestValue = row.getCell(4).value
+    const loanAmount = Number(getBorrowerCell(row, 'Loan Amount (PHP)', 6)) || 0
+    const paydayInterestValue = getBorrowerCell(row, 'Total Interest (PHP)', borrowerHeaders.get('Payday Interest (PHP)') ?? 4)
     const savedPaydayInterest = Number(paydayInterestValue)
     const paydayInterest = paydayInterestValue === null
       || paydayInterestValue === undefined
@@ -253,46 +290,64 @@ export const readWorkbookData = async (
       || savedPaydayInterest < 0
       ? loanAmount * 0.03
       : savedPaydayInterest
-    const transactionsValue = String(row.getCell(7).value ?? '').trim()
-    let transactions: LoanTransaction[] = []
-    if (transactionsValue) {
-      try {
-        const parsedTransactions = JSON.parse(transactionsValue)
-        if (Array.isArray(parsedTransactions)) {
-          transactions = parsedTransactions.filter((transaction): transaction is LoanTransaction => Boolean(transaction)
-            && typeof transaction.id === 'string'
-            && (transaction.type === 'loan'
-              || transaction.type === 'interest'
-              || transaction.type === 'interest-payment'
-              || transaction.type === 'principal-payment')
-            && Number.isFinite(Number(transaction.amount))
-            && typeof transaction.date === 'string')
-            .map((transaction) => ({
-              id: String(transaction.id),
-              type: transaction.type === 'interest'
-                || transaction.type === 'interest-payment'
-                || transaction.type === 'principal-payment' ? transaction.type : 'loan',
-              amount: Number(transaction.amount),
-              date: String(transaction.date),
-            }))
-        }
-      } catch {
-        transactions = []
-      }
-    }
+    const transactions = legacyTransactionsColumn
+      ? parseLoanTransactions(String(row.getCell(legacyTransactionsColumn).value ?? '').trim())
+      : []
     borrowers.push({
       id,
       name,
-      email: String(row.getCell(3).value ?? '').trim(),
-      guarantorName: String(row.getCell(8).value ?? '').trim(),
+      email: String(getBorrowerCell(row, 'Email', 3) ?? '').trim(),
+      guarantorName: String(getBorrowerCell(row, 'Guarantor', legacyTransactionsColumn ? 8 : 7) ?? '').trim(),
       loanAmount,
       paydayInterest,
-      createdAt: getCellDate(row.getCell(5).value),
+      createdAt: getCellDate(getBorrowerCell(row, 'Created At', 5)),
       transactions,
     })
   })
 
-  return { members: [...members.values()], accounts, borrowers }
+  const borrowersById = new Map(borrowers.map((borrower) => [borrower.id, borrower]))
+  workbook.getWorksheet('Borrower Transactions')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const borrower = borrowersById.get(String(row.getCell(1).value ?? '').trim())
+    const id = String(row.getCell(3).value ?? '').trim()
+    const type = String(row.getCell(4).value ?? '').trim()
+    const amount = Number(row.getCell(5).value)
+    const date = getCellDate(row.getCell(6).value)
+    if (!borrower || !id || !['loan', 'interest', 'interest-payment', 'principal-payment'].includes(type)
+      || !Number.isFinite(amount) || !date) return
+    borrower.transactions.push({
+      id,
+      type: type as LoanTransaction['type'],
+      amount,
+      date,
+    })
+  })
+
+  const removedBorrowerTransactions: RemovedBorrowerTransaction[] = []
+  workbook.getWorksheet('Removed Borrower Transactions')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const borrowerId = String(row.getCell(1).value ?? '').trim()
+    const borrowerName = String(row.getCell(2).value ?? '').trim()
+    const id = String(row.getCell(3).value ?? '').trim()
+    const type = String(row.getCell(4).value ?? '').trim()
+    const amount = Number(row.getCell(5).value)
+    const date = getCellDate(row.getCell(6).value)
+    if (!borrowerId || !borrowerName || !id
+      || !['loan', 'interest', 'interest-payment', 'principal-payment'].includes(type)
+      || !Number.isFinite(amount) || !date) return
+    removedBorrowerTransactions.push({
+      borrowerId,
+      borrowerName,
+      transaction: {
+        id,
+        type: type as LoanTransaction['type'],
+        amount,
+        date,
+      },
+    })
+  })
+
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions }
 }
 
 export const writeWorkbookData = async (
@@ -300,6 +355,7 @@ export const writeWorkbookData = async (
   members: Member[],
   accounts: DatabaseAccount[],
   borrowers: Borrower[] = [],
+  removedBorrowerTransactions: RemovedBorrowerTransaction[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -338,17 +394,81 @@ export const writeWorkbookData = async (
   ]))
 
   const borrowersSheet = workbook.addWorksheet('Borrowers')
-  borrowersSheet.addRow(['ID', 'Name', 'Email', 'Payday Interest (PHP)', 'Created At', 'Loan Amount (PHP)', 'Loan Transactions (JSON)', 'Guarantor'])
-  borrowers.forEach((borrower) => borrowersSheet.addRow([
-    borrower.id,
-    borrower.name,
-    borrower.email ?? '',
-    borrower.paydayInterest,
-    borrower.createdAt,
-    borrower.loanAmount,
-    JSON.stringify(borrower.transactions ?? []),
-    borrower.guarantorName ?? '',
-  ]))
+  borrowersSheet.addTable({
+    name: 'BorrowersTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium2', showRowStripes: true },
+    columns: [
+      { name: 'ID' },
+      { name: 'Name' },
+      { name: 'Email' },
+      { name: 'Created At' },
+      { name: 'Loan Amount (PHP)' },
+      { name: 'Total Interest (PHP)' },
+      { name: 'Guarantor' },
+    ],
+    rows: borrowers.map((borrower) => [
+      borrower.id,
+      borrower.name,
+      borrower.email ?? '',
+      borrower.createdAt,
+      borrower.loanAmount,
+      borrower.paydayInterest,
+      borrower.guarantorName ?? '',
+    ]),
+  })
+
+  const borrowerTransactionsSheet = workbook.addWorksheet('Borrower Transactions')
+  borrowerTransactionsSheet.addTable({
+    name: 'BorrowerTransactionsTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium4', showRowStripes: true },
+    columns: [
+      { name: 'Borrower ID' },
+      { name: 'Borrower' },
+      { name: 'Transaction ID' },
+      { name: 'Type' },
+      { name: 'Amount (PHP)' },
+      { name: 'Date' },
+    ],
+    rows: borrowers.flatMap((borrower) => (borrower.transactions ?? []).map((transaction) => [
+      borrower.id,
+      borrower.name,
+      transaction.id,
+      transaction.type,
+      transaction.amount,
+      transaction.date,
+    ])),
+  })
+
+  const removedBorrowerTransactionsSheet = workbook.addWorksheet('Removed Borrower Transactions')
+  removedBorrowerTransactionsSheet.addTable({
+    name: 'RemovedBorrowerTransactionsTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium5', showRowStripes: true },
+    columns: [
+      { name: 'Borrower ID' },
+      { name: 'Borrower' },
+      { name: 'Transaction ID' },
+      { name: 'Type' },
+      { name: 'Amount (PHP)' },
+      { name: 'Date' },
+    ],
+    rows: removedBorrowerTransactions.map(({ borrowerId, borrowerName, transaction }) => [
+      borrowerId,
+      borrowerName,
+      transaction.id,
+      transaction.type,
+      transaction.amount,
+      transaction.date,
+    ]),
+  })
 
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
@@ -366,5 +486,5 @@ export const readWorkbookMembers = async (directory: DatabaseDirectoryHandle) =>
 
 export const writeWorkbookMembers = async (directory: DatabaseDirectoryHandle, members: Member[]) => {
   const existingData = await readWorkbookData(directory)
-  await writeWorkbookData(directory, members, existingData?.accounts ?? [])
+  await writeWorkbookData(directory, members, existingData?.accounts ?? [], existingData?.borrowers ?? [], existingData?.removedBorrowerTransactions ?? [])
 }

@@ -16,6 +16,7 @@ import {
   type DatabaseAccount,
   type DatabaseDirectoryHandle,
   type Member,
+  type RemovedBorrowerTransaction,
 } from './database'
 import './App.css'
 
@@ -191,6 +192,16 @@ const formatCurrency = (amount: number) =>
     currency: 'PHP',
     maximumFractionDigits: 0,
   }).format(amount)
+
+const formatBorrowerCurrency = (amount: number) =>
+  new Intl.NumberFormat('en-PH', {
+    style: 'currency',
+    currency: 'PHP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
+
+const hasOutstandingBorrowerBalance = (amount: number) => Math.round(amount * 100) !== 0
 
 const getLocalDate = () => {
   const date = new Date()
@@ -1158,7 +1169,7 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      disabled={borrower.loanAmount !== 0 || borrower.paydayInterest !== 0}
+                      disabled={hasOutstandingBorrowerBalance(borrower.loanAmount) || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
                       onClick={() => onRemoveBorrower(borrower.id)}
                     >
                       Remove
@@ -1167,8 +1178,8 @@ function LoansPage({
                 </div>
                 <div className="borrower-metrics">
                   {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
-                  <span><strong>Principal:</strong> {formatCurrency(borrower.loanAmount)}</span>
-                  <span><strong>Interest:</strong> {formatCurrency(borrower.paydayInterest)}</span>
+                  <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
+                  <span className="borrower-metric interest-metric"><strong>Interest:</strong> {formatBorrowerCurrency(borrower.paydayInterest)}</span>
                 </div>
                 {payingBorrowerId === borrower.id && (
                   <form
@@ -1177,7 +1188,7 @@ function LoansPage({
                     onSubmit={(event) => handlePayBorrowerInterest(event, borrower)}
                   >
                     <label>
-                      Payment amount (up to {formatCurrency(borrower.paydayInterest)})
+                      Payment amount (up to {formatBorrowerCurrency(borrower.paydayInterest)})
                       <input
                         type="number"
                         min="0.01"
@@ -1213,7 +1224,7 @@ function LoansPage({
                     onSubmit={(event) => handlePayBorrowerPrincipal(event, borrower)}
                   >
                     <label>
-                      Payment amount (up to {formatCurrency(borrower.loanAmount)})
+                      Payment amount (up to {formatBorrowerCurrency(borrower.loanAmount)})
                       <input
                         type="number"
                         min="0.01"
@@ -1255,7 +1266,7 @@ function LoansPage({
                                 ? 'Principal paid'
                                 : transaction.type === 'interest' ? 'Interest' : 'Loan'}
                           </span>
-                          <strong>{transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}{formatCurrency(transaction.amount)}</strong>
+                          <strong>{transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}{formatBorrowerCurrency(transaction.amount)}</strong>
                           <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
                         </li>
                       ))}
@@ -1466,13 +1477,14 @@ function AccountPage({ name, email }: { name: string; email: string }) {
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview')
-  const [isDarkMode, setIsDarkMode] = useState(true)
+  const [isDarkMode, setIsDarkMode] = useState(false)
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const [isRegisterMode, setIsRegisterMode] = useState(false)
   const [loginMessage, setLoginMessage] = useState('')
   const [members, setMembers] = useState<Member[]>(loadSavedMembers)
   const [accounts, setAccounts] = useState<DatabaseAccount[]>([])
   const [borrowers, setBorrowers] = useState<Borrower[]>([])
+  const [removedBorrowerTransactions, setRemovedBorrowerTransactions] = useState<RemovedBorrowerTransaction[]>([])
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
   const [signedInRole, setSignedInRole] = useState<AccountRole | null>(null)
@@ -1484,6 +1496,7 @@ function App() {
   const initialMembers = useRef(members)
   const initialAccounts = useRef(accounts)
   const initialBorrowers = useRef(borrowers)
+  const initialRemovedBorrowerTransactions = useRef(removedBorrowerTransactions)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const registeredGuarantors = accounts
@@ -1532,8 +1545,9 @@ function App() {
           setMembers(syncAccountMembers(workbookData.accounts, workbookData.members))
           setAccounts(workbookData.accounts)
           setBorrowers(workbookData.borrowers)
+          setRemovedBorrowerTransactions(workbookData.removedBorrowerTransactions)
         } else {
-          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current)
+          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current)
         }
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
@@ -1564,7 +1578,7 @@ function App() {
         }
 
         setDatabaseMessage(`Saving Excel database: ${directory.name}…`)
-        await writeWorkbookData(directory, members, accounts, borrowers)
+        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions)
         if (isActive) setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
         if (!isActive) return
@@ -1582,7 +1596,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [members, accounts, borrowers])
+  }, [members, accounts, borrowers, removedBorrowerTransactions])
 
   const handleChooseDatabaseFolder = async () => {
     setIsDatabaseConnecting(true)
@@ -1592,18 +1606,21 @@ function App() {
       let connectedMembers = members
       let connectedAccounts = accounts
       let connectedBorrowers = borrowers
+      let connectedRemovedBorrowerTransactions = removedBorrowerTransactions
       if (workbookData) {
         connectedMembers = syncAccountMembers(workbookData.accounts, workbookData.members)
         connectedAccounts = workbookData.accounts
         connectedBorrowers = workbookData.borrowers
+        connectedRemovedBorrowerTransactions = workbookData.removedBorrowerTransactions
       } else {
-        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers)
+        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions)
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
       setMembers(connectedMembers)
       setAccounts(connectedAccounts)
       setBorrowers(connectedBorrowers)
+      setRemovedBorrowerTransactions(connectedRemovedBorrowerTransactions)
       setDatabaseMessage(`Excel database connected: ${directory.name}`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -1641,6 +1658,7 @@ function App() {
       const savedMembers = workbookData?.members ?? members
       const savedAccounts = workbookData?.accounts ?? accounts
       const savedBorrowers = workbookData?.borrowers ?? borrowers
+      const savedRemovedBorrowerTransactions = workbookData?.removedBorrowerTransactions ?? removedBorrowerTransactions
       databaseDirectory.current = directory
       await saveDirectory(directory)
 
@@ -1677,10 +1695,11 @@ function App() {
             accountMember.initialSavingsDate = today
           }
         }
-        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers)
+        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions)
         setMembers(updatedMembers)
         setAccounts(updatedAccounts)
         setBorrowers(savedBorrowers)
+        setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
@@ -1693,6 +1712,7 @@ function App() {
         setMembers(syncAccountMembers(savedAccounts, savedMembers))
         setAccounts(savedAccounts)
         setBorrowers(savedBorrowers)
+        setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
         setSignedInRole(account.role)
@@ -1750,8 +1770,22 @@ function App() {
 
   const removeBorrower = (borrowerId: string) => {
     if (signedInRole !== 'admin') return
+    const borrowerToRemove = borrowers.find((borrower) => borrower.id === borrowerId)
+    if (!borrowerToRemove
+      || hasOutstandingBorrowerBalance(borrowerToRemove.loanAmount)
+      || hasOutstandingBorrowerBalance(borrowerToRemove.paydayInterest)) return
+    setRemovedBorrowerTransactions((currentTransactions) => [
+      ...currentTransactions,
+      ...(borrowerToRemove.transactions ?? []).map((transaction) => ({
+        borrowerId: borrowerToRemove.id,
+        borrowerName: borrowerToRemove.name,
+        transaction,
+      })),
+    ])
     setBorrowers((currentBorrowers) => currentBorrowers.filter((borrower) =>
-      borrower.id !== borrowerId || borrower.loanAmount !== 0 || borrower.paydayInterest !== 0,
+      borrower.id !== borrowerId
+      || hasOutstandingBorrowerBalance(borrower.loanAmount)
+      || hasOutstandingBorrowerBalance(borrower.paydayInterest),
     ))
   }
 

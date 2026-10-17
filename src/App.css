@@ -661,6 +661,28 @@ p {
   gap: 8px;
 }
 
+.borrower-metric {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.principal-metric {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(14, 116, 144, 0.16);
+}
+
+.interest-metric {
+  border-color: rgba(74, 222, 128, 0.42);
+  background: rgba(22, 101, 52, 0.18);
+}
+
+.borrower-metric strong {
+  color: #f8fafc;
+}
+
 .borrower-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
