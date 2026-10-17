@@ -929,11 +929,6 @@ function LoansPage({
         : transaction.amount,
     })))
     .sort((first, second) => second.date.localeCompare(first.date))
-  const borrowerLoanValue = Number(borrowerLoanAmount)
-  const paydayInterest = Number.isFinite(borrowerLoanValue) && borrowerLoanValue > 0
-    ? borrowerLoanValue * 0.03
-    : 0
-
   const handleAddBorrower = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = borrowerName.trim()
@@ -957,7 +952,7 @@ function LoansPage({
       guarantorName,
       email: '',
       loanAmount,
-      paydayInterest: loanAmount * 0.03,
+      paydayInterest: 0,
       createdAt: new Date().toISOString(),
       transactions: [{
         id: crypto.randomUUID(),
@@ -1081,8 +1076,8 @@ function LoansPage({
             </select>
           </label>
           <label>
-            Payday interest (3%)
-            <output>{formatCurrency(paydayInterest)}</output>
+            Initial interest
+            <output>{formatCurrency(0)}</output>
           </label>
           <label>
             Loan amount (PHP)
