@@ -1083,6 +1083,93 @@ p {
   width: 100%;
 }
 
+.profits-net-profit-body {
+  display: grid;
+  gap: 18px;
+  width: 100%;
+}
+
+.profit-period-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.profit-period-date {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.profit-period-date input {
+  width: min(100%, 220px);
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid rgba(29, 78, 216, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #0f172a;
+  font: inherit;
+}
+
+.profits-net-profit-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px 24px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(29, 78, 216, 0.16);
+}
+
+.profits-net-profit-details > div {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.profits-net-profit-details span {
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.profits-net-profit-details strong {
+  color: #0f172a;
+  font-size: 1.2rem;
+}
+
+.profits-net-profit-details button {
+  margin-left: auto;
+}
+
+.profit-transfer-form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(29, 78, 216, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.profit-transfer-form p {
+  margin: 0;
+  color: #475569;
+  font-size: 0.88rem;
+}
+
+.profit-transfer-form > strong {
+  color: #0f172a;
+}
+
+.profit-transfer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .profits-net-profit-label {
   margin: 0;
   color: #1d4ed8;
@@ -1103,6 +1190,34 @@ p {
 .profits-net-profit-card > span {
   margin-top: 10px;
   color: #16a34a;
+}
+
+@media (max-width: 640px) {
+  .profit-period-date {
+    flex: 1 1 100%;
+  }
+
+  .profit-period-date input {
+    width: 100%;
+  }
+
+  .profits-net-profit-content {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .profits-net-profit-card h2 {
+    text-align: left;
+  }
+
+  .profits-net-profit-details button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .profit-transfer-actions button {
+    flex: 1 1 100%;
+  }
 }
 
 .summary-card p {
@@ -1659,6 +1774,28 @@ p {
 
 .member-profit-box {
   gap: 10px;
+}
+
+.profit-interest-list {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.profit-interest-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.profit-interest-list time {
+  color: #67e8f9;
+  font-size: 0.85rem;
 }
 
 .member-profit-actions {

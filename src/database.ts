@@ -30,6 +30,13 @@ export type RemovedBorrowerTransaction = {
   borrowerName: string
   transaction: LoanTransaction
 }
+export type ProfitTransfer = {
+  amount: number
+  date: string
+  periodFrom?: string
+  periodTo?: string
+  paymentAllocations?: Array<{ transactionId: string; amount: number }>
+}
 
 export type Borrower = {
   id: string
@@ -195,7 +202,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -348,7 +355,41 @@ export const readWorkbookData = async (
     })
   })
 
-  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions }
+  const profitTransfers: ProfitTransfer[] = []
+  const profitTransfersSheet = workbook.getWorksheet('Profit Transfers')
+  const transferHeaders = new Map<string, number>()
+  profitTransfersSheet?.getRow(1).eachCell((cell, columnNumber) => {
+    transferHeaders.set(String(cell.value ?? '').trim(), columnNumber)
+  })
+  const getTransferCell = (row: ExcelJS.Row, header: string, fallbackColumn: number) =>
+    row.getCell(transferHeaders.get(header) ?? fallbackColumn).value
+  profitTransfersSheet?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const amount = Number(getTransferCell(row, 'Amount (PHP)', 1))
+    const date = getCellDate(getTransferCell(row, 'Date', 2))
+    const periodFrom = String(getTransferCell(row, 'Period From', 3) ?? '') || undefined
+    const periodTo = String(getTransferCell(row, 'Period To', 4) ?? '') || undefined
+    const allocationsValue = String(getTransferCell(row, 'Payment Allocations (JSON)', 5) ?? '')
+    let paymentAllocations: ProfitTransfer['paymentAllocations']
+    try {
+      const parsed: unknown = JSON.parse(allocationsValue)
+      if (Array.isArray(parsed)) {
+        paymentAllocations = parsed.filter((allocation): allocation is { transactionId: string; amount: number } =>
+          Boolean(allocation)
+          && typeof allocation.transactionId === 'string'
+          && Number.isFinite(Number(allocation.amount))
+          && Number(allocation.amount) > 0,
+        ).map((allocation) => ({ transactionId: allocation.transactionId, amount: Number(allocation.amount) }))
+      }
+    } catch {
+      paymentAllocations = undefined
+    }
+    if (Number.isFinite(amount) && amount > 0 && date) {
+      profitTransfers.push({ amount, date, periodFrom, periodTo, paymentAllocations })
+    }
+  })
+
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers }
 }
 
 export const writeWorkbookData = async (
@@ -357,6 +398,7 @@ export const writeWorkbookData = async (
   accounts: DatabaseAccount[],
   borrowers: Borrower[] = [],
   removedBorrowerTransactions: RemovedBorrowerTransaction[] = [],
+  profitTransfers: ProfitTransfer[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -471,6 +513,16 @@ export const writeWorkbookData = async (
     ]),
   })
 
+  const profitTransfersSheet = workbook.addWorksheet('Profit Transfers')
+  profitTransfersSheet.addRow(['Amount (PHP)', 'Date', 'Period From', 'Period To', 'Payment Allocations (JSON)'])
+  profitTransfers.forEach((transfer) => profitTransfersSheet.addRow([
+    transfer.amount,
+    transfer.date,
+    transfer.periodFrom ?? '',
+    transfer.periodTo ?? '',
+    JSON.stringify(transfer.paymentAllocations ?? []),
+  ]))
+
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
   try {
@@ -487,5 +539,12 @@ export const readWorkbookMembers = async (directory: DatabaseDirectoryHandle) =>
 
 export const writeWorkbookMembers = async (directory: DatabaseDirectoryHandle, members: Member[]) => {
   const existingData = await readWorkbookData(directory)
-  await writeWorkbookData(directory, members, existingData?.accounts ?? [], existingData?.borrowers ?? [], existingData?.removedBorrowerTransactions ?? [])
+  await writeWorkbookData(
+    directory,
+    members,
+    existingData?.accounts ?? [],
+    existingData?.borrowers ?? [],
+    existingData?.removedBorrowerTransactions ?? [],
+    existingData?.profitTransfers ?? [],
+  )
 }
