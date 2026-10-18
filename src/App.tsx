@@ -5,9 +5,11 @@ import {
   createPasswordHash,
   loadSavedDirectory,
   loadSavedMembers,
+  loadSavedProfitCashouts,
   readWorkbookData,
   saveDirectory,
   saveMembersLocally,
+  saveProfitCashoutsLocally,
   supportsDatabaseFolder,
   verifyPassword,
   writeWorkbookData,
@@ -16,6 +18,7 @@ import {
   type DatabaseAccount,
   type DatabaseDirectoryHandle,
   type Member,
+  type ProfitCashout,
   type ProfitTransfer,
   type RemovedBorrowerTransaction,
 } from './database'
@@ -1517,6 +1520,7 @@ function ProfitsPage({
   borrowers,
   removedBorrowerTransactions,
   profitTransfers,
+  profitCashouts,
   totalInterestPaid,
   totalReceivableInterest,
   totalGroupAllowance,
@@ -1527,10 +1531,11 @@ function ProfitsPage({
   borrowers: Borrower[]
   removedBorrowerTransactions: RemovedBorrowerTransaction[]
   profitTransfers: ProfitTransfer[]
+  profitCashouts: ProfitCashout[]
   totalInterestPaid: number
   totalReceivableInterest: number
   totalGroupAllowance: number
-  onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'withdraw' | 'penalty') => void
+  onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty') => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
 }) {
   const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
@@ -1545,7 +1550,7 @@ function ProfitsPage({
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
       .filter((transaction) => transaction.type === 'interest-payment')
       .map((transaction) => ({
-        id: transaction.id,
+        id: `${borrower.id}-${transaction.id}`,
         borrowerName: borrower.name,
         amount: transaction.amount,
         date: transaction.date,
@@ -1587,13 +1592,35 @@ function ProfitsPage({
     { label: 'Group oprtng cost', value: '₱7,540', tone: 'negative' },
   ]
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const settledTransfersByMember = new Map<string, number>()
+  const legacyCashoutsByMember = new Map<string, number>()
+  profitCashouts.forEach((cashout) => {
+    if (cashout.transferTotal !== undefined) {
+      settledTransfersByMember.set(
+        cashout.memberName,
+        Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
+      )
+    } else if (cashout.action !== 'added to savings') {
+      legacyCashoutsByMember.set(
+        cashout.memberName,
+        (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+      )
+    }
+  })
   const memberProfits = members.map((member) => {
     const memberSavings = getMemberSavings(member)
     const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
-    const profitShare = profitTransferred > 0 ? (sharePercentage / 100) * profitTransferred : 0
+    const settledTransfers = settledTransfersByMember.get(member.name)
+    const eligibleTransfers = settledTransfers === undefined
+      ? profitTransferred
+      : Math.max(0, profitTransferred - settledTransfers)
+    const grossProfitShare = profitTransferred > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
+    const legacyCashouts = settledTransfers === undefined ? legacyCashoutsByMember.get(member.name) ?? 0 : 0
+    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts).toFixed(2))
     return { member, sharePercentage, profitShare }
   })
-  const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'withdraw' | 'penalty'>>({})
+  const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'get profit'>>({})
+  const [memberPenaltyAmounts, setMemberPenaltyAmounts] = useState<Record<string, string>>({})
 
   return (
     <main className="page-view">
@@ -1773,39 +1800,94 @@ function ProfitsPage({
         <div className="stats-grid">
           {memberProfits.map(({ member, sharePercentage, profitShare }) => {
             const action = memberProfitActions[member.name] ?? 'add to savings'
+            const penaltyAmountValue = memberPenaltyAmounts[member.name] ?? ''
+            const penaltyAmount = Number(penaltyAmountValue)
+            const memberSavings = getMemberSavings(member)
             return (
               <div key={member.name} className="stat-box member-profit-box">
                 <span>{member.name}</span>
                 <strong>{formatCurrency(profitShare)}</strong>
                 <small>{sharePercentage.toFixed(1)}% of savings</small>
                 <div className="member-profit-actions">
-                  <label>
-                    Reason
-                    <select
-                      value={action}
-                      onChange={(event) => {
-                        const nextAction = event.target.value as 'add to savings' | 'withdraw' | 'penalty'
-                        setMemberProfitActions((current) => ({ ...current, [member.name]: nextAction }))
+                  <div className="member-profit-primary-action">
+                    <label>
+                      Profit action
+                      <select
+                        value={action}
+                        onChange={(event) => {
+                          const nextAction = event.target.value as 'add to savings' | 'get profit'
+                          setMemberProfitActions((current) => ({ ...current, [member.name]: nextAction }))
+                        }}
+                      >
+                        <option value="add to savings">Add to savings</option>
+                        <option value="get profit">Get profit</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary-button member-profit-deduct-button"
+                      disabled={profitShare <= 0}
+                      onClick={() => onApplyMemberProfitAction(member.name, profitShare, action)}
+                    >
+                      {action === 'add to savings' ? 'Add profit' : 'Get profit'}
+                    </button>
+                  </div>
+                  <div className="member-profit-penalty-action">
+                    <label>
+                      Penalty amount (PHP)
+                      <input
+                        type="number"
+                        min="0"
+                        max={memberSavings}
+                        step="any"
+                        value={penaltyAmountValue}
+                        onChange={(event) => setMemberPenaltyAmounts((current) => ({
+                          ...current,
+                          [member.name]: event.target.value,
+                        }))}
+                        placeholder="0"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary-button member-profit-deduct-button"
+                      disabled={penaltyAmountValue === '' || !Number.isFinite(penaltyAmount) || penaltyAmount <= 0 || penaltyAmount > memberSavings}
+                      onClick={() => {
+                        onApplyMemberProfitAction(member.name, penaltyAmount, 'penalty')
+                        setMemberPenaltyAmounts((current) => ({ ...current, [member.name]: '' }))
                       }}
                     >
-                      <option value="add to savings">Add to savings</option>
-                      <option value="withdraw">Withdraw</option>
-                      <option value="penalty">Penalty</option>
-                    </select>
-                  </label>
-                  <button
-                    type="button"
-                    className="secondary-button member-profit-deduct-button"
-                    disabled={profitShare <= 0}
-                    onClick={() => onApplyMemberProfitAction(member.name, profitShare, action)}
-                  >
-                    Deduct
-                  </button>
+                      Penalty
+                    </button>
+                  </div>
                 </div>
               </div>
             )
           })}
         </div>
+      </section>
+      <section className="panel full-width-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Member payouts</p>
+            <h3>Profit transactions</h3>
+          </div>
+        </div>
+        {profitCashouts.length > 0 ? (
+          <ul className="profit-interest-list">
+            {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
+              <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
+                <span>{cashout.memberName} · {cashout.action === 'added to savings' ? 'Added to savings' : 'Cashout'}</span>
+                <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
+                  {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
+                </strong>
+                <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="savings-history-empty">No profit transactions yet.</p>
+        )}
       </section>
     </main>
   )
@@ -1928,6 +2010,7 @@ function App() {
   const [borrowers, setBorrowers] = useState<Borrower[]>([])
   const [removedBorrowerTransactions, setRemovedBorrowerTransactions] = useState<RemovedBorrowerTransaction[]>([])
   const [profitTransfers, setProfitTransfers] = useState<ProfitTransfer[]>([])
+  const [profitCashouts, setProfitCashouts] = useState<ProfitCashout[]>(loadSavedProfitCashouts)
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
   const [signedInRole, setSignedInRole] = useState<AccountRole | null>(null)
@@ -1941,6 +2024,7 @@ function App() {
   const initialBorrowers = useRef(borrowers)
   const initialRemovedBorrowerTransactions = useRef(removedBorrowerTransactions)
   const initialProfitTransfers = useRef(profitTransfers)
+  const initialProfitCashouts = useRef(profitCashouts)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
@@ -1997,8 +2081,9 @@ function App() {
           setBorrowers(workbookData.borrowers)
           setRemovedBorrowerTransactions(workbookData.removedBorrowerTransactions)
           setProfitTransfers(workbookData.profitTransfers)
+          setProfitCashouts(workbookData.profitCashouts)
         } else {
-          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current)
+          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current, initialProfitCashouts.current)
         }
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
@@ -2015,6 +2100,7 @@ function App() {
 
   useEffect(() => {
     saveMembersLocally(members)
+    saveProfitCashoutsLocally(profitCashouts)
     const directory = databaseDirectory.current
     if (!directory) return
 
@@ -2029,7 +2115,7 @@ function App() {
         }
 
         setDatabaseMessage(`Saving Excel database: ${directory.name}…`)
-        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers)
+        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts)
         if (isActive) setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
         if (!isActive) return
@@ -2047,7 +2133,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers])
+  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts])
 
   const handleChooseDatabaseFolder = async () => {
     setIsDatabaseConnecting(true)
@@ -2059,14 +2145,16 @@ function App() {
       let connectedBorrowers = borrowers
       let connectedRemovedBorrowerTransactions = removedBorrowerTransactions
       let connectedProfitTransfers = profitTransfers
+      let connectedProfitCashouts = profitCashouts
       if (workbookData) {
         connectedMembers = syncAccountMembers(workbookData.accounts, workbookData.members)
         connectedAccounts = workbookData.accounts
         connectedBorrowers = workbookData.borrowers
         connectedRemovedBorrowerTransactions = workbookData.removedBorrowerTransactions
         connectedProfitTransfers = workbookData.profitTransfers
+        connectedProfitCashouts = workbookData.profitCashouts
       } else {
-        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers)
+        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers, connectedProfitCashouts)
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
@@ -2075,6 +2163,7 @@ function App() {
       setBorrowers(connectedBorrowers)
       setRemovedBorrowerTransactions(connectedRemovedBorrowerTransactions)
       setProfitTransfers(connectedProfitTransfers)
+      setProfitCashouts(connectedProfitCashouts)
       setDatabaseMessage(`Excel database connected: ${directory.name}`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -2114,6 +2203,7 @@ function App() {
       const savedBorrowers = workbookData?.borrowers ?? borrowers
       const savedRemovedBorrowerTransactions = workbookData?.removedBorrowerTransactions ?? removedBorrowerTransactions
       const savedProfitTransfers = workbookData?.profitTransfers ?? profitTransfers
+      const savedProfitCashouts = workbookData?.profitCashouts ?? profitCashouts
       databaseDirectory.current = directory
       await saveDirectory(directory)
 
@@ -2150,12 +2240,13 @@ function App() {
             accountMember.initialSavingsDate = today
           }
         }
-        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers)
+        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers, savedProfitCashouts)
         setMembers(updatedMembers)
         setAccounts(updatedAccounts)
         setBorrowers(savedBorrowers)
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
+        setProfitCashouts(savedProfitCashouts)
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
@@ -2170,6 +2261,7 @@ function App() {
         setBorrowers(savedBorrowers)
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
+        setProfitCashouts(savedProfitCashouts)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
         setSignedInRole(account.role)
@@ -2208,18 +2300,33 @@ function App() {
   const applyMemberProfitAction = (
     memberName: string,
     amount: number,
-    action: 'add to savings' | 'withdraw' | 'penalty',
+    action: 'add to savings' | 'get profit' | 'penalty',
   ) => {
     const date = getLocalDate()
+    const transferTotal = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
     if (action === 'add to savings') {
       addSavings(memberName, amount, date)
+      setProfitCashouts((currentCashouts) => [...currentCashouts, {
+        memberName,
+        amount,
+        date,
+        action: 'added to savings',
+        transferTotal,
+      }])
       return
     }
 
-    const reason = action === 'withdraw'
-      ? 'Member profit withdrawal'
-      : 'Profit penalty'
-    pullOutSavings(memberName, amount, date, reason)
+    if (action === 'get profit') {
+      setProfitCashouts((currentCashouts) => [...currentCashouts, {
+        memberName,
+        amount,
+        date,
+        action: 'cashout',
+        transferTotal,
+      }])
+      return
+    }
+    pullOutSavings(memberName, amount, date, 'Profit penalty')
   }
 
   const transferProfit = (dateFrom: string, dateTo: string) => {
@@ -2238,7 +2345,7 @@ function App() {
         ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
           .filter((transaction) => transaction.type === 'interest-payment')
           .map((transaction) => ({
-            transactionId: transaction.id,
+            transactionId: `${borrower.id}-${transaction.id}`,
             amount: transaction.amount,
             date: transaction.date,
           }))),
@@ -2494,6 +2601,7 @@ function App() {
           borrowers={borrowers}
           removedBorrowerTransactions={removedBorrowerTransactions}
           profitTransfers={profitTransfers}
+          profitCashouts={profitCashouts}
           totalInterestPaid={totalInterestPaid}
           totalReceivableInterest={totalReceivableInterest}
           totalGroupAllowance={totalGroupAllowance}

@@ -1800,10 +1800,18 @@ p {
 
 .member-profit-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   align-items: end;
   margin-top: 4px;
+}
+
+.member-profit-primary-action,
+.member-profit-penalty-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .member-profit-actions label {
@@ -1816,7 +1824,8 @@ p {
   letter-spacing: 0.04em;
 }
 
-.member-profit-actions select {
+.member-profit-actions select,
+.member-profit-actions input {
   width: 100%;
   min-width: 0;
   padding: 0.7rem 0.8rem;

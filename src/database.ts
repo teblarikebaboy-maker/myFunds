@@ -37,6 +37,13 @@ export type ProfitTransfer = {
   periodTo?: string
   paymentAllocations?: Array<{ transactionId: string; amount: number }>
 }
+export type ProfitCashout = {
+  memberName: string
+  amount: number
+  date: string
+  action?: 'cashout' | 'added to savings'
+  transferTotal?: number
+}
 
 export type Borrower = {
   id: string
@@ -62,6 +69,7 @@ export type DatabaseDirectoryHandle = {
 }
 
 const LOCAL_STORAGE_KEY = 'funds-organizer-members-v1'
+const LOCAL_PROFIT_CASHOUTS_KEY = 'funds-organizer-profit-cashouts-v1'
 const DATABASE_FILE_NAME = 'funds-organizer-database.xlsx'
 const DIRECTORY_DATABASE_NAME = 'funds-organizer-directory'
 const DIRECTORY_STORE_NAME = 'settings'
@@ -88,6 +96,25 @@ export const loadSavedMembers = (): Member[] => {
 export const saveMembersLocally = (members: Member[]) => {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(members))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedProfitCashouts = (): ProfitCashout[] => {
+  try {
+    const savedCashouts = localStorage.getItem(LOCAL_PROFIT_CASHOUTS_KEY)
+    if (!savedCashouts) return []
+    const parsed: unknown = JSON.parse(savedCashouts)
+    return Array.isArray(parsed) ? parsed as ProfitCashout[] : []
+  } catch {
+    return []
+  }
+}
+
+export const saveProfitCashoutsLocally = (cashouts: ProfitCashout[]) => {
+  try {
+    localStorage.setItem(LOCAL_PROFIT_CASHOUTS_KEY, JSON.stringify(cashouts))
   } catch {
     // Keep the application usable when browser storage is unavailable.
   }
@@ -202,7 +229,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; profitCashouts: ProfitCashout[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -389,7 +416,27 @@ export const readWorkbookData = async (
     }
   })
 
-  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers }
+  const profitCashouts: ProfitCashout[] = []
+  workbook.getWorksheet('Profit Cashouts')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const memberName = String(row.getCell(1).value ?? '').trim()
+    const amount = getCellNumber(row.getCell(2).value, `${memberName || 'Unknown member'}, profit cashout`)
+    const date = getCellDate(row.getCell(3).value)
+    const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
+    const action = actionValue === 'added to savings' ? 'added to savings' : 'cashout'
+    const transferTotalCell = row.getCell(5).value
+    const transferTotalValue = transferTotalCell === null || transferTotalCell === undefined || transferTotalCell === ''
+      ? Number.NaN
+      : Number(transferTotalCell)
+    const transferTotal = Number.isFinite(transferTotalValue) && transferTotalValue >= 0
+      ? transferTotalValue
+      : undefined
+    if (memberName && Number.isFinite(amount) && amount > 0 && date) {
+      profitCashouts.push({ memberName, amount, date, action, transferTotal })
+    }
+  })
+
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts }
 }
 
 export const writeWorkbookData = async (
@@ -399,6 +446,7 @@ export const writeWorkbookData = async (
   borrowers: Borrower[] = [],
   removedBorrowerTransactions: RemovedBorrowerTransaction[] = [],
   profitTransfers: ProfitTransfer[] = [],
+  profitCashouts: ProfitCashout[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -523,6 +571,16 @@ export const writeWorkbookData = async (
     JSON.stringify(transfer.paymentAllocations ?? []),
   ]))
 
+  const profitCashoutsSheet = workbook.addWorksheet('Profit Cashouts')
+  profitCashoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)'])
+  profitCashouts.forEach((cashout) => profitCashoutsSheet.addRow([
+    cashout.memberName,
+    cashout.amount,
+    cashout.date,
+    cashout.action ?? 'cashout',
+    cashout.transferTotal ?? '',
+  ]))
+
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
   try {
@@ -546,5 +604,6 @@ export const writeWorkbookMembers = async (directory: DatabaseDirectoryHandle, m
     existingData?.borrowers ?? [],
     existingData?.removedBorrowerTransactions ?? [],
     existingData?.profitTransfers ?? [],
+    existingData?.profitCashouts ?? [],
   )
 }
