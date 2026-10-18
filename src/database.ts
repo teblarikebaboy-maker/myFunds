@@ -1,6 +1,6 @@
 import type ExcelJS from 'exceljs'
 
-export type SavingsContribution = { amount: number; date: string }
+export type SavingsContribution = { amount: number; date: string; source?: 'member profit' }
 export type SavingsWithdrawal = { amount: number; date: string; reason: string }
 export type Member = {
   name: string
@@ -51,6 +51,7 @@ export type Borrower = {
   email?: string
   guarantorName?: string
   loanAmount: number
+  interestRate: number
   paydayInterest: number
   createdAt: string
   transactions: LoanTransaction[]
@@ -269,6 +270,9 @@ export const readWorkbookData = async (
     member.contributions.push({
       date: getCellDate(row.getCell(2).value),
       amount: getCellNumber(row.getCell(3).value, `${name}, contribution`),
+      source: String(row.getCell(4).value ?? '').trim().toLowerCase() === 'member profit'
+        ? 'member profit'
+        : undefined,
     })
   })
 
@@ -316,6 +320,16 @@ export const readWorkbookData = async (
     const name = String(getBorrowerCell(row, 'Name', 2) ?? '').trim()
     if (!id || !name) return
     const loanAmount = Number(getBorrowerCell(row, 'Loan Amount (PHP)', 6)) || 0
+    const interestRateValue = getBorrowerCell(row, 'Interest Rate (%)', 9)
+    const savedInterestRate = Number(interestRateValue)
+    const interestRate = interestRateValue === null
+      || interestRateValue === undefined
+      || interestRateValue === ''
+      || !Number.isFinite(savedInterestRate)
+      || savedInterestRate < 0
+      || savedInterestRate > 100
+      ? 3
+      : savedInterestRate
     const paydayInterestValue = getBorrowerCell(row, 'Total Interest (PHP)', borrowerHeaders.get('Payday Interest (PHP)') ?? 4)
     const savedPaydayInterest = Number(paydayInterestValue)
     const paydayInterest = paydayInterestValue === null
@@ -334,6 +348,7 @@ export const readWorkbookData = async (
       email: String(getBorrowerCell(row, 'Email', 3) ?? '').trim(),
       guarantorName: String(getBorrowerCell(row, 'Guarantor', legacyTransactionsColumn ? 8 : 7) ?? '').trim(),
       loanAmount,
+      interestRate,
       paydayInterest,
       createdAt: getCellDate(getBorrowerCell(row, 'Created At', 5)),
       transactions,
@@ -462,9 +477,9 @@ export const writeWorkbookData = async (
   ]))
 
   const contributionsSheet = workbook.addWorksheet('Contributions')
-  contributionsSheet.addRow(['Member', 'Date', 'Amount'])
+  contributionsSheet.addRow(['Member', 'Date', 'Amount', 'Source'])
   members.forEach((member) => member.contributions.forEach((contribution) => {
-    contributionsSheet.addRow([member.name, contribution.date, contribution.amount])
+    contributionsSheet.addRow([member.name, contribution.date, contribution.amount, contribution.source ?? ''])
   }))
 
   const withdrawalsSheet = workbook.addWorksheet('Withdrawals')
@@ -499,6 +514,7 @@ export const writeWorkbookData = async (
       { name: 'Loan Amount (PHP)' },
       { name: 'Total Interest (PHP)' },
       { name: 'Guarantor' },
+      { name: 'Interest Rate (%)' },
     ],
     rows: borrowers.map((borrower) => [
       borrower.id,
@@ -508,6 +524,7 @@ export const writeWorkbookData = async (
       borrower.loanAmount,
       borrower.paydayInterest,
       borrower.guarantorName ?? '',
+      borrower.interestRate,
     ]),
   })
 

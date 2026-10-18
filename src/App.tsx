@@ -52,7 +52,7 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
   ...member.contributions.map((contribution, index) => ({
     id: `${member.name}-contribution-${index}`,
     member: member.name,
-    type: 'Added savings',
+    type: contribution.source === 'member profit' ? 'Profit added to savings' : 'Added savings',
     amount: contribution.amount,
     date: contribution.date,
   })),
@@ -1010,6 +1010,7 @@ function LoansPage({
   const [borrowerName, setBorrowerName] = useState('')
   const [guarantorName, setGuarantorName] = useState('')
   const [borrowerLoanAmount, setBorrowerLoanAmount] = useState('')
+  const [borrowerInterestRate, setBorrowerInterestRate] = useState('3')
   const [borrowerError, setBorrowerError] = useState('')
   const [payingBorrowerId, setPayingBorrowerId] = useState<string | null>(null)
   const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
@@ -1041,6 +1042,7 @@ function LoansPage({
     event.preventDefault()
     const name = borrowerName.trim()
     const loanAmount = Number(borrowerLoanAmount)
+    const interestRate = Number(borrowerInterestRate)
     if (!name) {
       setBorrowerError('Enter the borrower’s name.')
       return
@@ -1053,6 +1055,10 @@ function LoansPage({
       setBorrowerError('Enter a loan amount greater than zero.')
       return
     }
+    if (borrowerInterestRate === '' || !Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100) {
+      setBorrowerError('Enter an interest rate from 0 to 100 percent.')
+      return
+    }
 
     onAddBorrower({
       id: crypto.randomUUID(),
@@ -1060,6 +1066,7 @@ function LoansPage({
       guarantorName,
       email: '',
       loanAmount,
+      interestRate,
       paydayInterest: 0,
       createdAt: new Date().toISOString(),
       transactions: [{
@@ -1072,6 +1079,7 @@ function LoansPage({
     setBorrowerName('')
     setGuarantorName('')
     setBorrowerLoanAmount('')
+    setBorrowerInterestRate('3')
     setBorrowerError('')
     setIsAddingBorrower(false)
   }
@@ -1208,8 +1216,20 @@ function LoansPage({
             </select>
           </label>
           <label>
-            Initial interest
-            <output>{formatCurrency(0)}</output>
+            Interest rate (%)
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              required
+              value={borrowerInterestRate}
+              onChange={(event) => {
+                setBorrowerInterestRate(event.target.value)
+                setBorrowerError('')
+              }}
+              placeholder="3"
+            />
           </label>
           <label>
             Loan amount (PHP)
@@ -1320,6 +1340,7 @@ function LoansPage({
                 <div className="borrower-metrics">
                   {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
                   <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
+                  <span className="borrower-metric interest-metric"><strong>Rate:</strong> {borrower.interestRate}%</span>
                   <span className="borrower-metric interest-metric"><strong>Interest:</strong> {formatBorrowerCurrency(borrower.paydayInterest)}</span>
                 </div>
                 {payingBorrowerId === borrower.id && (
@@ -2282,7 +2303,7 @@ function App() {
     }
   }
 
-  const addSavings = (memberName: string, amount: number, date: string) => {
+  const addSavings = (memberName: string, amount: number, date: string, source?: 'member profit') => {
     const canEditMemberSavings = (member: Member) =>
       signedInRole === 'admin'
       || (signedInRole === 'member'
@@ -2291,7 +2312,7 @@ function App() {
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName && canEditMemberSavings(member)
-          ? { ...member, contributions: [...member.contributions, { amount, date }] }
+          ? { ...member, contributions: [...member.contributions, { amount, date, source }] }
           : member,
       ),
     )
@@ -2305,7 +2326,7 @@ function App() {
     const date = getLocalDate()
     const transferTotal = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
     if (action === 'add to savings') {
-      addSavings(memberName, amount, date)
+      addSavings(memberName, amount, date, 'member profit')
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
         memberName,
         amount,
@@ -2463,7 +2484,7 @@ function App() {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
-      const accruedInterest = Number((borrower.loanAmount * 0.03).toFixed(2))
+      const accruedInterest = Number((borrower.loanAmount * borrower.interestRate / 100).toFixed(2))
       const nextPaydayInterest = Number((borrower.paydayInterest + accruedInterest).toFixed(2))
       const nextTransaction = {
         id: crypto.randomUUID(),
