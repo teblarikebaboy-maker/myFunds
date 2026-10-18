@@ -559,10 +559,7 @@ p {
 
 .savings-directory-item {
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-content: start;
-  align-items: start;
-  gap: 8px 12px;
+  gap: 12px;
   min-width: 0;
   width: 100%;
   padding: 16px;
@@ -574,16 +571,6 @@ p {
 .savings-directory-item > strong:first-child {
   grid-column: 1 / -1;
   overflow-wrap: anywhere;
-}
-
-.savings-directory-item span {
-  color: #94a3b8;
-  font-size: 0.82rem;
-}
-
-.savings-directory-item > strong:nth-of-type(2) {
-  justify-self: end;
-  text-align: right;
 }
 
 .savings-member-header {
@@ -598,6 +585,49 @@ p {
 .savings-member-header > strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.savings-member-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  grid-column: 1 / -1;
+}
+
+.savings-member-metric {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.9);
+}
+
+.savings-member-metric span {
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.savings-member-metric strong {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 1rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.savings-member-metric strong small {
+  flex: 0 0 auto;
+  color: #0369a1;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .delete-member-button {
@@ -1026,23 +1056,70 @@ p {
 }
 
 .summary-card {
-  padding: 22px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 150px;
+  padding: 18px 18px 16px;
+}
+
+.profits-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.profits-net-profit-card {
+  grid-column: 1 / -1;
+  min-height: 170px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(219, 234, 254, 0.88));
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.profits-net-profit-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+}
+
+.profits-net-profit-label {
+  margin: 0;
+  color: #1d4ed8;
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.profits-net-profit-card h2 {
+  margin: 0;
+  color: #0f172a;
+  text-align: right;
+  font-size: clamp(2.1rem, 2.8vw, 3rem);
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.profits-net-profit-card > span {
+  margin-top: 10px;
+  color: #16a34a;
 }
 
 .summary-card p {
   color: #94a3b8;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .summary-card h2 {
-  font-size: clamp(1.7rem, 2vw, 2.3rem);
-  letter-spacing: -0.06em;
+  font-size: clamp(1.5rem, 1.9vw, 2.1rem);
+  letter-spacing: -0.05em;
+  line-height: 1.1;
 }
 
 .summary-card span {
   display: inline-block;
-  margin-top: 10px;
-  font-size: 0.8rem;
+  margin-top: 8px;
+  font-size: 0.78rem;
   font-weight: 700;
 }
 
@@ -1580,6 +1657,44 @@ p {
   letter-spacing: -0.04em;
 }
 
+.member-profit-box {
+  gap: 10px;
+}
+
+.member-profit-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 4px;
+}
+
+.member-profit-actions label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.member-profit-actions select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.member-profit-deduct-button {
+  padding-inline: 1rem;
+  white-space: nowrap;
+}
+
 .app-shell[data-theme='light'] {
   background: rgba(255, 255, 255, 0.9);
   border-color: rgba(100, 116, 139, 0.2);
@@ -1905,8 +2020,25 @@ p {
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
 }
 
+.app-shell[data-theme='light'] .savings-member-metric {
+  border-color: rgba(14, 165, 233, 0.18);
+  background: linear-gradient(135deg, #f8fbff, #eff6ff);
+}
+
+.app-shell[data-theme='light'] .savings-member-metric span {
+  color: #475569;
+}
+
+.app-shell[data-theme='light'] .savings-member-metric strong {
+  color: #0f172a;
+}
+
+.app-shell[data-theme='light'] .savings-member-metric strong small {
+  color: #0369a1;
+}
+
 .app-shell[data-theme='light'] .savings-directory-item span {
-  color: #64748b;
+  color: #021d44;
 }
 
 .app-shell[data-theme='light'] .delete-member-form {

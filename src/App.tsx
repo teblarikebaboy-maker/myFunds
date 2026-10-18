@@ -158,13 +158,6 @@ const savingsPlans = [
   { name: 'Home down payment', value: '₱15,600', target: '₱30,000', rate: 52 },
 ]
 
-const profitsData = [
-  { label: 'Net profit', value: '₱11,240', tone: 'positive' },
-  { label: 'YTD margin', value: '23.8%', tone: 'positive' },
-  { label: 'Capital gains', value: '₱2,960', tone: 'positive' },
-  { label: 'Operating costs', value: '₱7,540', tone: 'negative' },
-]
-
 const dataBreakdown = [
   { label: 'Housing', value: '29%' },
   { label: 'Food', value: '18%' },
@@ -200,6 +193,8 @@ const formatBorrowerCurrency = (amount: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount)
+
+const formatPercentage = (value: number) => `${value.toFixed(1)}%`
 
 const hasOutstandingBorrowerBalance = (amount: number) => Math.round(amount * 100) !== 0
 
@@ -636,6 +631,7 @@ function SavingsPage({
     .reduce((total, member) => total + getMemberSavings(member), 0)
   const selectedMemberDetails = members.find((member) => member.name === selectedMember)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const getSavingsShare = (member: Member) => totalSavings > 0 ? (getMemberSavings(member) / totalSavings) * 100 : 0
   const savingsHistory: SavingsTransaction[] = members
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
     .flatMap(getMemberSavingsTransactions)
@@ -880,12 +876,21 @@ function SavingsPage({
                       </button>
                     )}
                   </div>
-                  <span>Current savings</span>
-                  <strong>{formatCurrency(getMemberSavings(member))}</strong>
-                  <span>Amount guaranteed</span>
-                  <strong>{formatCurrency(borrowers
-                    .filter((borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase())
-                    .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
+                  <div className="savings-member-metrics">
+                    <div className="savings-member-metric">
+                      <span>Current savings</span>
+                      <strong>
+                        {formatCurrency(getMemberSavings(member))}
+                        <small>{formatPercentage(getSavingsShare(member))}</small>
+                      </strong>
+                    </div>
+                    <div className="savings-member-metric">
+                      <span>Amount guaranteed</span>
+                      <strong>{formatCurrency(borrowers
+                        .filter((borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase())
+                        .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
+                    </div>
+                  </div>
                   {isAdmin && deletingMemberName === member.name && (
                     <form
                       className="delete-member-form"
@@ -1487,7 +1492,34 @@ function LoansPage({
   )
 }
 
-function ProfitsPage({ totalInterestPaid }: { totalInterestPaid: number }) {
+function ProfitsPage({
+  members,
+  totalInterestPaid,
+  totalReceivableInterest,
+  totalGroupAllowance,
+  onApplyMemberProfitAction,
+}: {
+  members: Member[]
+  totalInterestPaid: number
+  totalReceivableInterest: number
+  totalGroupAllowance: number
+  onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'withdraw' | 'penalty') => void
+}) {
+  const profitsData = [
+    { label: 'Net profit', value: formatCurrency(totalInterestPaid), tone: 'positive' },
+    { label: 'Total receivable', value: formatCurrency(totalReceivableInterest), tone: 'positive' },
+    { label: 'Group allowance', value: formatCurrency(totalGroupAllowance), tone: 'positive' },
+    { label: 'Group oprtng cost', value: '₱7,540', tone: 'negative' },
+  ]
+  const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const memberProfits = members.map((member) => {
+    const memberSavings = getMemberSavings(member)
+    const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
+    const profitShare = totalInterestPaid > 0 ? (sharePercentage / 100) * totalInterestPaid : 0
+    return { member, sharePercentage, profitShare }
+  })
+  const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'withdraw' | 'penalty'>>({})
+
   return (
     <main className="page-view">
       <section className="page-header">
@@ -1497,12 +1529,25 @@ function ProfitsPage({ totalInterestPaid }: { totalInterestPaid: number }) {
         </div>
       </section>
 
-      <section className="summary-grid">
+      <section className="summary-grid profits-summary-grid">
         {profitsData.map((item) => (
-          <article key={item.label} className="summary-card">
-            <p>{item.label}</p>
-            <h2>{item.label === 'Net profit' ? formatCurrency(totalInterestPaid) : item.value}</h2>
-            <span className={item.tone}>vs last month</span>
+          <article
+            key={item.label}
+            className={`summary-card ${item.label === 'Net profit' ? 'profits-net-profit-card' : ''}`}
+          >
+            {item.label === 'Net profit' ? (
+              <div className="profits-net-profit-content">
+                <p className="profits-net-profit-label">{item.label}</p>
+                <h2>{item.value}</h2>
+              </div>
+            ) : (
+              <>
+                <p>{item.label}</p>
+                <h2>{item.value}</h2>
+                <span className={item.tone}>vs last month</span>
+              </>
+            )}
+            {item.label === 'Net profit' && <span className={item.tone}>vs last month</span>}
           </article>
         ))}
       </section>
@@ -1510,23 +1555,44 @@ function ProfitsPage({ totalInterestPaid }: { totalInterestPaid: number }) {
       <section className="panel full-width-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Earnings</p>
-            <h3>Revenue mix</h3>
+            <p className="eyebrow">Members</p>
+            <h3>Members Profit</h3>
           </div>
         </div>
         <div className="stats-grid">
-          <div className="stat-box">
-            <span>Salary</span>
-            <strong>₱42,400</strong>
-          </div>
-          <div className="stat-box">
-            <span>Investments</span>
-            <strong>₱13,600</strong>
-          </div>
-          <div className="stat-box">
-            <span>Side income</span>
-            <strong>₱7,900</strong>
-          </div>
+          {memberProfits.map(({ member, sharePercentage, profitShare }) => {
+            const action = memberProfitActions[member.name] ?? 'add to savings'
+            return (
+              <div key={member.name} className="stat-box member-profit-box">
+                <span>{member.name}</span>
+                <strong>{formatCurrency(profitShare)}</strong>
+                <small>{sharePercentage.toFixed(1)}% of savings</small>
+                <div className="member-profit-actions">
+                  <label>
+                    Reason
+                    <select
+                      value={action}
+                      onChange={(event) => {
+                        const nextAction = event.target.value as 'add to savings' | 'withdraw' | 'penalty'
+                        setMemberProfitActions((current) => ({ ...current, [member.name]: nextAction }))
+                      }}
+                    >
+                      <option value="add to savings">Add to savings</option>
+                      <option value="withdraw">Withdraw</option>
+                      <option value="penalty">Penalty</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary-button member-profit-deduct-button"
+                    onClick={() => onApplyMemberProfitAction(member.name, profitShare, action)}
+                  >
+                    Deduct
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </section>
     </main>
@@ -1664,6 +1730,11 @@ function App() {
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
+  const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
+  const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
+    (memberTotal, withdrawal) => memberTotal + withdrawal.amount * 0.1,
+    0,
+  ), 0)
   const registeredGuarantors = accounts
     .flatMap((account) => {
       const email = account.email.trim().toLowerCase()
@@ -1913,6 +1984,23 @@ function App() {
     )
   }
 
+  const applyMemberProfitAction = (
+    memberName: string,
+    amount: number,
+    action: 'add to savings' | 'withdraw' | 'penalty',
+  ) => {
+    const date = getLocalDate()
+    if (action === 'add to savings') {
+      addSavings(memberName, amount, date)
+      return
+    }
+
+    const reason = action === 'withdraw'
+      ? 'Member profit withdrawal'
+      : 'Profit penalty'
+    pullOutSavings(memberName, amount, date, reason)
+  }
+
   const pullOutSavings = (memberName: string, amount: number, date: string, reason: string) => {
     const canEditMemberSavings = (member: Member) =>
       signedInRole === 'admin'
@@ -2129,7 +2217,13 @@ function App() {
           />
         )
       case 'profits':
-        return <ProfitsPage totalInterestPaid={totalInterestPaid} />
+        return <ProfitsPage
+          members={members}
+          totalInterestPaid={totalInterestPaid}
+          totalReceivableInterest={totalReceivableInterest}
+          totalGroupAllowance={totalGroupAllowance}
+          onApplyMemberProfitAction={applyMemberProfitAction}
+        />
       case 'data':
         return (
           <DataPage
