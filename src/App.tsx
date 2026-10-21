@@ -4,10 +4,16 @@ import {
   chooseDatabaseDirectory,
   createPasswordHash,
   loadSavedDirectory,
+  loadSavedDeletedProfitTransactions,
+  loadSavedDeletedLoans,
+  loadSavedDeletedSavingsTransactions,
   loadSavedMembers,
   loadSavedProfitCashouts,
   readWorkbookData,
   saveDirectory,
+  saveDeletedProfitTransactionsLocally,
+  saveDeletedLoansLocally,
+  saveDeletedSavingsTransactionsLocally,
   saveMembersLocally,
   saveProfitCashoutsLocally,
   supportsDatabaseFolder,
@@ -17,6 +23,9 @@ import {
   type Borrower,
   type DatabaseAccount,
   type DatabaseDirectoryHandle,
+  type DeletedLoanRecord,
+  type DeletedProfitTransaction,
+  type DeletedSavingsTransaction,
   type Member,
   type ProfitCashout,
   type ProfitTransfer,
@@ -508,6 +517,7 @@ type SavingsPageProps = {
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
   onDeleteMember: (memberName: string, adminPassword: string) => Promise<{ success: boolean; message?: string }>
+  onClearSavingsTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }
 
 function SavingsPage({
@@ -521,6 +531,7 @@ function SavingsPage({
   onAddSavings,
   onPullOutSavings,
   onDeleteMember,
+  onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [savingsMember, setSavingsMember] = useState('')
   const [savingsAmount, setSavingsAmount] = useState('')
@@ -536,6 +547,11 @@ function SavingsPage({
   const [deleteAdminPassword, setDeleteAdminPassword] = useState('')
   const [deleteMemberError, setDeleteMemberError] = useState('')
   const [isDeletingMember, setIsDeletingMember] = useState(false)
+  const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
+  const [clearAdminPassword, setClearAdminPassword] = useState('')
+  const [clearConfirmationText, setClearConfirmationText] = useState('')
+  const [clearSavingsError, setClearSavingsError] = useState('')
+  const [isClearingSavings, setIsClearingSavings] = useState(false)
   const filteredMembers = members.filter((member) =>
     member.name.toLowerCase().includes(memberSearch.trim().toLowerCase()),
   )
@@ -627,6 +643,31 @@ function SavingsPage({
       setDeleteMemberError(error instanceof Error ? error.message : 'Could not verify the admin password.')
     } finally {
       setIsDeletingMember(false)
+    }
+  }
+
+  const handleClearSavingsTransactions = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (clearConfirmationText.trim() !== 'deleting records') {
+      setClearSavingsError('Type “deleting records” exactly to continue.')
+      return
+    }
+
+    setIsClearingSavings(true)
+    setClearSavingsError('')
+    try {
+      const result = await onClearSavingsTransactions(clearAdminPassword, clearConfirmationText)
+      if (!result.success) {
+        setClearSavingsError(result.message ?? 'Could not clear savings transactions.')
+        return
+      }
+      setIsClearConfirmationOpen(false)
+      setClearAdminPassword('')
+      setClearConfirmationText('')
+    } catch (error) {
+      setClearSavingsError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsClearingSavings(false)
     }
   }
 
@@ -958,6 +999,65 @@ function SavingsPage({
             <p className="eyebrow">Savings History</p>
             <h3>Savings transactions</h3>
           </div>
+          {isAdmin && (isClearConfirmationOpen ? (
+            <form
+              className="clear-loans-form clear-savings-form"
+              noValidate
+              onSubmit={(event) => void handleClearSavingsTransactions(event)}
+            >
+              <label>
+                Admin password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={clearAdminPassword}
+                  onChange={(event) => {
+                    setClearAdminPassword(event.target.value)
+                    setClearSavingsError('')
+                  }}
+                />
+              </label>
+              <label>
+                Type deleting records
+                <input
+                  type="text"
+                  autoComplete="off"
+                  required
+                  value={clearConfirmationText}
+                  onChange={(event) => {
+                    setClearConfirmationText(event.target.value)
+                    setClearSavingsError('')
+                  }}
+                />
+              </label>
+              <button type="submit" className="danger-button" disabled={isClearingSavings}>
+                {isClearingSavings ? 'Clearing…' : 'OK'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button clear-loans-cancel"
+                disabled={isClearingSavings}
+                onClick={() => {
+                  setIsClearConfirmationOpen(false)
+                  setClearAdminPassword('')
+                  setClearConfirmationText('')
+                  setClearSavingsError('')
+                }}
+              >
+                Cancel
+              </button>
+              {clearSavingsError && <p className="clear-loans-error" role="alert">{clearSavingsError}</p>}
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => setIsClearConfirmationOpen(true)}
+            >
+              Clear transactions
+            </button>
+          ))}
         </div>
         {savingsHistory.length > 0 ? (
           <ul className="transaction-list savings-history-list">
@@ -988,22 +1088,26 @@ function SavingsPage({
 function LoansPage({
   borrowers,
   guarantors,
+  isAdmin,
   onAddBorrower,
   onAddBorrowerInterest,
   onPayBorrowerInterest,
   onPayBorrowerPrincipal,
   onAddBorrowerPrincipal,
   onRemoveBorrower,
+  onClearLoans,
   totalInterestPaid,
 }: {
   borrowers: Borrower[]
   guarantors: string[]
+  isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number, date: string) => void
   onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
   onAddBorrowerPrincipal: (borrowerId: string, amount: number) => void
   onRemoveBorrower: (borrowerId: string) => void
+  onClearLoans: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
   totalInterestPaid: number
 }) {
   const [isAddingBorrower, setIsAddingBorrower] = useState(false)
@@ -1023,6 +1127,11 @@ function LoansPage({
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
   const [principalAdditionError, setPrincipalAdditionError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
+  const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
+  const [clearAdminPassword, setClearAdminPassword] = useState('')
+  const [clearConfirmationText, setClearConfirmationText] = useState('')
+  const [clearLoansError, setClearLoansError] = useState('')
+  const [isClearingLoans, setIsClearingLoans] = useState(false)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
@@ -1082,6 +1191,32 @@ function LoansPage({
     setBorrowerInterestRate('3')
     setBorrowerError('')
     setIsAddingBorrower(false)
+  }
+
+  const handleClearLoans = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (clearConfirmationText.trim() !== 'deleting records') {
+      setClearLoansError('Type “deleting records” exactly to continue.')
+      return
+    }
+
+    setIsClearingLoans(true)
+    setClearLoansError('')
+    try {
+      const result = await onClearLoans(clearAdminPassword, clearConfirmationText)
+      if (!result.success) {
+        setClearLoansError(result.message ?? 'Could not clear loan records.')
+        return
+      }
+      setIsClearConfirmationOpen(false)
+      setClearAdminPassword('')
+      setClearConfirmationText('')
+      setBorrowerSearch('')
+    } catch (error) {
+      setClearLoansError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsClearingLoans(false)
+    }
   }
 
   const handlePayBorrowerInterest = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
@@ -1261,6 +1396,61 @@ function LoansPage({
             <h3>Borrower directory</h3>
           </div>
           <div className="borrower-directory-controls">
+            {isAdmin && (isClearConfirmationOpen ? (
+              <form className="clear-loans-form" noValidate onSubmit={(event) => void handleClearLoans(event)}>
+                <label>
+                  Admin password
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    required
+                    value={clearAdminPassword}
+                    onChange={(event) => {
+                      setClearAdminPassword(event.target.value)
+                      setClearLoansError('')
+                    }}
+                  />
+                </label>
+                <label>
+                  Type deleting records
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    required
+                    value={clearConfirmationText}
+                    onChange={(event) => {
+                      setClearConfirmationText(event.target.value)
+                      setClearLoansError('')
+                    }}
+                  />
+                </label>
+                <button type="submit" className="danger-button" disabled={isClearingLoans}>
+                  {isClearingLoans ? 'Clearing…' : 'OK'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button clear-loans-cancel"
+                  disabled={isClearingLoans}
+                  onClick={() => {
+                    setIsClearConfirmationOpen(false)
+                    setClearAdminPassword('')
+                    setClearConfirmationText('')
+                    setClearLoansError('')
+                  }}
+                >
+                  Cancel
+                </button>
+                {clearLoansError && <p className="clear-loans-error" role="alert">{clearLoansError}</p>}
+              </form>
+            ) : (
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => setIsClearConfirmationOpen(true)}
+              >
+                Clear loans
+              </button>
+            ))}
             <input
               className="borrower-search"
               type="search"
@@ -1545,8 +1735,10 @@ function ProfitsPage({
   totalInterestPaid,
   totalReceivableInterest,
   totalGroupAllowance,
+  isAdmin,
   onApplyMemberProfitAction,
   onTransferProfit,
+  onClearProfitTransactions,
 }: {
   members: Member[]
   borrowers: Borrower[]
@@ -1556,8 +1748,10 @@ function ProfitsPage({
   totalInterestPaid: number
   totalReceivableInterest: number
   totalGroupAllowance: number
+  isAdmin: boolean
   onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty', memberProfit: number) => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
+  onClearProfitTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }) {
   const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
   const [profitDateTo, setProfitDateTo] = useState(getLocalDate)
@@ -1565,6 +1759,11 @@ function ProfitsPage({
   const [transferDateFrom, setTransferDateFrom] = useState(`${currentYear}-01-01`)
   const [transferDateTo, setTransferDateTo] = useState(getLocalDate)
   const [paymentSearch, setPaymentSearch] = useState('')
+  const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
+  const [clearAdminPassword, setClearAdminPassword] = useState('')
+  const [clearConfirmationText, setClearConfirmationText] = useState('')
+  const [clearProfitError, setClearProfitError] = useState('')
+  const [isClearingProfit, setIsClearingProfit] = useState(false)
   const profitTransferred = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
   const profitBalance = Number(Math.max(0, totalInterestPaid - profitTransferred).toFixed(2))
   const interestPayments = [
@@ -1605,6 +1804,30 @@ function ProfitsPage({
   const searchedInterestPayments = filteredInterestPayments.filter((payment) =>
     payment.borrowerName.toLowerCase().includes(paymentSearch.trim().toLowerCase()),
   )
+  const handleClearProfitTransactions = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (clearConfirmationText.trim() !== 'deleting records') {
+      setClearProfitError('Type “deleting records” exactly to continue.')
+      return
+    }
+
+    setIsClearingProfit(true)
+    setClearProfitError('')
+    try {
+      const result = await onClearProfitTransactions(clearAdminPassword, clearConfirmationText)
+      if (!result.success) {
+        setClearProfitError(result.message ?? 'Could not clear profit transactions.')
+        return
+      }
+      setIsClearConfirmationOpen(false)
+      setClearAdminPassword('')
+      setClearConfirmationText('')
+    } catch (error) {
+      setClearProfitError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsClearingProfit(false)
+    }
+  }
   const selectedInterestTotal = filteredInterestPayments.reduce((total, payment) => total + payment.amount, 0)
   const profitsData = [
     { label: 'Net profit', value: formatCurrency(selectedInterestTotal), tone: 'positive' },
@@ -1906,6 +2129,65 @@ function ProfitsPage({
             <p className="eyebrow">Member payouts</p>
             <h3>Profit transactions</h3>
           </div>
+          {isAdmin && (isClearConfirmationOpen ? (
+            <form
+              className="clear-loans-form clear-savings-form"
+              noValidate
+              onSubmit={(event) => void handleClearProfitTransactions(event)}
+            >
+              <label>
+                Admin password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={clearAdminPassword}
+                  onChange={(event) => {
+                    setClearAdminPassword(event.target.value)
+                    setClearProfitError('')
+                  }}
+                />
+              </label>
+              <label>
+                Type deleting records
+                <input
+                  type="text"
+                  autoComplete="off"
+                  required
+                  value={clearConfirmationText}
+                  onChange={(event) => {
+                    setClearConfirmationText(event.target.value)
+                    setClearProfitError('')
+                  }}
+                />
+              </label>
+              <button type="submit" className="danger-button" disabled={isClearingProfit}>
+                {isClearingProfit ? 'Clearing…' : 'OK'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button clear-loans-cancel"
+                disabled={isClearingProfit}
+                onClick={() => {
+                  setIsClearConfirmationOpen(false)
+                  setClearAdminPassword('')
+                  setClearConfirmationText('')
+                  setClearProfitError('')
+                }}
+              >
+                Cancel
+              </button>
+              {clearProfitError && <p className="clear-loans-error" role="alert">{clearProfitError}</p>}
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="danger-button"
+              onClick={() => setIsClearConfirmationOpen(true)}
+            >
+              Clear transactions
+            </button>
+          ))}
         </div>
         {profitCashouts.length > 0 ? (
           <ul className="profit-interest-list">
@@ -2040,6 +2322,9 @@ function App() {
   const [isRegisterMode, setIsRegisterMode] = useState(false)
   const [loginMessage, setLoginMessage] = useState('')
   const [members, setMembers] = useState<Member[]>(loadSavedMembers)
+  const [deletedSavingsTransactions, setDeletedSavingsTransactions] = useState<DeletedSavingsTransaction[]>(loadSavedDeletedSavingsTransactions)
+  const [deletedProfitTransactions, setDeletedProfitTransactions] = useState<DeletedProfitTransaction[]>(loadSavedDeletedProfitTransactions)
+  const [deletedLoans, setDeletedLoans] = useState<DeletedLoanRecord[]>(loadSavedDeletedLoans)
   const [accounts, setAccounts] = useState<DatabaseAccount[]>([])
   const [borrowers, setBorrowers] = useState<Borrower[]>([])
   const [removedBorrowerTransactions, setRemovedBorrowerTransactions] = useState<RemovedBorrowerTransaction[]>([])
@@ -2054,6 +2339,9 @@ function App() {
   const [canChooseDatabaseFolder, setCanChooseDatabaseFolder] = useState(supportsDatabaseFolder)
   const databaseDirectory = useRef<DatabaseDirectoryHandle | null>(null)
   const initialMembers = useRef(members)
+  const initialDeletedSavingsTransactions = useRef(deletedSavingsTransactions)
+  const initialDeletedProfitTransactions = useRef(deletedProfitTransactions)
+  const initialDeletedLoans = useRef(deletedLoans)
   const initialAccounts = useRef(accounts)
   const initialBorrowers = useRef(borrowers)
   const initialRemovedBorrowerTransactions = useRef(removedBorrowerTransactions)
@@ -2111,13 +2399,22 @@ function App() {
         if (!isActive) return
         if (workbookData) {
           setMembers(syncAccountMembers(workbookData.accounts, workbookData.members))
+          setDeletedSavingsTransactions(workbookData.deletedSavingsTransactions.length > 0
+            ? workbookData.deletedSavingsTransactions
+            : initialDeletedSavingsTransactions.current)
           setAccounts(workbookData.accounts)
           setBorrowers(workbookData.borrowers)
           setRemovedBorrowerTransactions(workbookData.removedBorrowerTransactions)
           setProfitTransfers(workbookData.profitTransfers)
           setProfitCashouts(workbookData.profitCashouts)
+          setDeletedProfitTransactions(workbookData.deletedProfitTransactions.length > 0
+            ? workbookData.deletedProfitTransactions
+            : initialDeletedProfitTransactions.current)
+          setDeletedLoans(workbookData.deletedLoans.length > 0
+            ? workbookData.deletedLoans
+            : initialDeletedLoans.current)
         } else {
-          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current, initialProfitCashouts.current)
+          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current, initialProfitCashouts.current, initialDeletedSavingsTransactions.current, initialDeletedProfitTransactions.current, initialDeletedLoans.current)
         }
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
@@ -2135,6 +2432,9 @@ function App() {
   useEffect(() => {
     saveMembersLocally(members)
     saveProfitCashoutsLocally(profitCashouts)
+    saveDeletedSavingsTransactionsLocally(deletedSavingsTransactions)
+    saveDeletedProfitTransactionsLocally(deletedProfitTransactions)
+    saveDeletedLoansLocally(deletedLoans)
     const directory = databaseDirectory.current
     if (!directory) return
 
@@ -2149,7 +2449,7 @@ function App() {
         }
 
         setDatabaseMessage(`Saving Excel database: ${directory.name}…`)
-        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts)
+        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans)
         if (isActive) setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
         if (!isActive) return
@@ -2167,7 +2467,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts])
+  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans])
 
   const handleChooseDatabaseFolder = async () => {
     setIsDatabaseConnecting(true)
@@ -2180,6 +2480,9 @@ function App() {
       let connectedRemovedBorrowerTransactions = removedBorrowerTransactions
       let connectedProfitTransfers = profitTransfers
       let connectedProfitCashouts = profitCashouts
+      let connectedDeletedSavingsTransactions = deletedSavingsTransactions
+      let connectedDeletedProfitTransactions = deletedProfitTransactions
+      let connectedDeletedLoans = deletedLoans
       if (workbookData) {
         connectedMembers = syncAccountMembers(workbookData.accounts, workbookData.members)
         connectedAccounts = workbookData.accounts
@@ -2187,8 +2490,17 @@ function App() {
         connectedRemovedBorrowerTransactions = workbookData.removedBorrowerTransactions
         connectedProfitTransfers = workbookData.profitTransfers
         connectedProfitCashouts = workbookData.profitCashouts
+        connectedDeletedSavingsTransactions = workbookData.deletedSavingsTransactions.length > 0
+          ? workbookData.deletedSavingsTransactions
+          : deletedSavingsTransactions
+        connectedDeletedProfitTransactions = workbookData.deletedProfitTransactions.length > 0
+          ? workbookData.deletedProfitTransactions
+          : deletedProfitTransactions
+        connectedDeletedLoans = workbookData.deletedLoans.length > 0
+          ? workbookData.deletedLoans
+          : deletedLoans
       } else {
-        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers, connectedProfitCashouts)
+        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers, connectedProfitCashouts, connectedDeletedSavingsTransactions, connectedDeletedProfitTransactions, connectedDeletedLoans)
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
@@ -2198,6 +2510,9 @@ function App() {
       setRemovedBorrowerTransactions(connectedRemovedBorrowerTransactions)
       setProfitTransfers(connectedProfitTransfers)
       setProfitCashouts(connectedProfitCashouts)
+      setDeletedSavingsTransactions(connectedDeletedSavingsTransactions)
+      setDeletedProfitTransactions(connectedDeletedProfitTransactions)
+      setDeletedLoans(connectedDeletedLoans)
       setDatabaseMessage(`Excel database connected: ${directory.name}`)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -2238,6 +2553,15 @@ function App() {
       const savedRemovedBorrowerTransactions = workbookData?.removedBorrowerTransactions ?? removedBorrowerTransactions
       const savedProfitTransfers = workbookData?.profitTransfers ?? profitTransfers
       const savedProfitCashouts = workbookData?.profitCashouts ?? profitCashouts
+      const savedDeletedSavingsTransactions = workbookData?.deletedSavingsTransactions.length
+        ? workbookData.deletedSavingsTransactions
+        : deletedSavingsTransactions
+      const savedDeletedProfitTransactions = workbookData?.deletedProfitTransactions.length
+        ? workbookData.deletedProfitTransactions
+        : deletedProfitTransactions
+      const savedDeletedLoans = workbookData?.deletedLoans.length
+        ? workbookData.deletedLoans
+        : deletedLoans
       databaseDirectory.current = directory
       await saveDirectory(directory)
 
@@ -2274,13 +2598,16 @@ function App() {
             accountMember.initialSavingsDate = today
           }
         }
-        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers, savedProfitCashouts)
+        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers, savedProfitCashouts, savedDeletedSavingsTransactions, savedDeletedProfitTransactions, savedDeletedLoans)
         setMembers(updatedMembers)
         setAccounts(updatedAccounts)
         setBorrowers(savedBorrowers)
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
         setProfitCashouts(savedProfitCashouts)
+        setDeletedSavingsTransactions(savedDeletedSavingsTransactions)
+        setDeletedProfitTransactions(savedDeletedProfitTransactions)
+        setDeletedLoans(savedDeletedLoans)
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
@@ -2296,6 +2623,9 @@ function App() {
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
         setProfitCashouts(savedProfitCashouts)
+        setDeletedSavingsTransactions(savedDeletedSavingsTransactions)
+        setDeletedProfitTransactions(savedDeletedProfitTransactions)
+        setDeletedLoans(savedDeletedLoans)
         setSignedInUser(account.name)
         setSignedInEmail(account.email)
         setSignedInRole(account.role)
@@ -2488,6 +2818,152 @@ function App() {
     return { success: true }
   }
 
+  const clearSavingsTransactions = async (adminPassword: string, confirmationText: string) => {
+    if (signedInRole !== 'admin') {
+      return { success: false, message: 'Only an admin can clear savings transactions.' }
+    }
+    if (confirmationText.trim() !== 'deleting records') {
+      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    }
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      return { success: false, message: 'The logged-in admin account could not be verified.' }
+    }
+    if (!(await verifyPassword(adminPassword, adminAccount))) {
+      return { success: false, message: 'The admin password is incorrect.' }
+    }
+
+    const resetDate = getLocalDate()
+    const deletedTransactions = members.flatMap((member): DeletedSavingsTransaction[] => [
+      ...(member.initialSavings > 0 ? [{
+        memberName: member.name,
+        type: 'initial savings' as const,
+        amount: member.initialSavings,
+        date: member.initialSavingsDate,
+        deletedAt: resetDate,
+      }] : []),
+      ...member.contributions.map((contribution) => ({
+        memberName: member.name,
+        type: 'contribution' as const,
+        amount: contribution.amount,
+        date: contribution.date,
+        details: contribution.source,
+        deletedAt: resetDate,
+      })),
+      ...member.withdrawals.map((withdrawal) => ({
+        memberName: member.name,
+        type: 'withdrawal' as const,
+        amount: withdrawal.amount,
+        date: withdrawal.date,
+        details: withdrawal.reason,
+        deletedAt: resetDate,
+      })),
+    ])
+    setDeletedSavingsTransactions((currentTransactions) => [
+      ...currentTransactions,
+      ...deletedTransactions,
+    ])
+    setMembers((currentMembers) => currentMembers.map((member) => ({
+      ...member,
+      initialSavings: 0,
+      initialSavingsDate: resetDate,
+      contributions: [],
+      withdrawals: [],
+    })))
+    return { success: true }
+  }
+
+  const clearLoanRecords = async (adminPassword: string, confirmationText: string) => {
+    if (signedInRole !== 'admin') {
+      return { success: false, message: 'Only an admin can clear loan records.' }
+    }
+    if (confirmationText.trim() !== 'deleting records') {
+      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    }
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      return { success: false, message: 'The logged-in admin account could not be verified.' }
+    }
+    if (!(await verifyPassword(adminPassword, adminAccount))) {
+      return { success: false, message: 'The admin password is incorrect.' }
+    }
+
+    const deletedAt = getLocalDate()
+    const borrowerRecords = borrowers.flatMap((borrower): DeletedLoanRecord[] => {
+      const borrowerTransactions = borrower.transactions ?? []
+      const records = borrowerTransactions.map((transaction) => ({
+        borrowerId: borrower.id,
+        borrowerName: borrower.name,
+        email: borrower.email,
+        guarantorName: borrower.guarantorName,
+        loanAmount: borrower.loanAmount,
+        interestRate: borrower.interestRate,
+        paydayInterest: borrower.paydayInterest,
+        createdAt: borrower.createdAt,
+        transaction,
+        deletedAt,
+      }))
+      return records.length > 0 ? records : [{
+        borrowerId: borrower.id,
+        borrowerName: borrower.name,
+        email: borrower.email,
+        guarantorName: borrower.guarantorName,
+        loanAmount: borrower.loanAmount,
+        interestRate: borrower.interestRate,
+        paydayInterest: borrower.paydayInterest,
+        createdAt: borrower.createdAt,
+        deletedAt,
+      }]
+    })
+    const removedTransactionRecords = removedBorrowerTransactions.map(({ borrowerId, borrowerName, transaction }) => ({
+      borrowerId,
+      borrowerName,
+      loanAmount: 0,
+      interestRate: 0,
+      paydayInterest: 0,
+      createdAt: transaction.date,
+      transaction,
+      deletedAt,
+    }))
+    setDeletedLoans((currentLoans) => [...currentLoans, ...borrowerRecords, ...removedTransactionRecords])
+    setBorrowers([])
+    setRemovedBorrowerTransactions([])
+    return { success: true }
+  }
+
+  const clearProfitTransactions = async (adminPassword: string, confirmationText: string) => {
+    if (signedInRole !== 'admin') {
+      return { success: false, message: 'Only an admin can clear profit transactions.' }
+    }
+    if (confirmationText.trim() !== 'deleting records') {
+      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    }
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      return { success: false, message: 'The logged-in admin account could not be verified.' }
+    }
+    if (!(await verifyPassword(adminPassword, adminAccount))) {
+      return { success: false, message: 'The admin password is incorrect.' }
+    }
+
+    const deletedAt = getLocalDate()
+    setDeletedProfitTransactions((currentTransactions) => [
+      ...currentTransactions,
+      ...profitCashouts.map((transaction) => ({ ...transaction, deletedAt })),
+    ])
+    setProfitCashouts([])
+    return { success: true }
+  }
+
   const addBorrower = (borrower: Borrower) => {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => [...currentBorrowers, borrower])
@@ -2614,6 +3090,7 @@ function App() {
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onDeleteMember={deleteSavingsMember}
+            onClearSavingsTransactions={clearSavingsTransactions}
           />
         )
       }
@@ -2634,6 +3111,7 @@ function App() {
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onDeleteMember={deleteSavingsMember}
+            onClearSavingsTransactions={clearSavingsTransactions}
           />
         )
       case 'loans':
@@ -2641,12 +3119,14 @@ function App() {
           <LoansPage
             borrowers={borrowers}
             guarantors={registeredGuarantors}
+            isAdmin={signedInRole === 'admin'}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
             onPayBorrowerInterest={payBorrowerInterest}
             onPayBorrowerPrincipal={payBorrowerPrincipal}
             onAddBorrowerPrincipal={addBorrowerPrincipal}
             onRemoveBorrower={removeBorrower}
+            onClearLoans={clearLoanRecords}
             totalInterestPaid={totalInterestPaid}
           />
         )
@@ -2660,8 +3140,10 @@ function App() {
           totalInterestPaid={totalInterestPaid}
           totalReceivableInterest={totalReceivableInterest}
           totalGroupAllowance={totalGroupAllowance}
+          isAdmin={signedInRole === 'admin'}
           onApplyMemberProfitAction={applyMemberProfitAction}
           onTransferProfit={transferProfit}
+          onClearProfitTransactions={clearProfitTransactions}
         />
       case 'data':
         return (

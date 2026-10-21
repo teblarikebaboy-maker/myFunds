@@ -2,6 +2,14 @@ import type ExcelJS from 'exceljs'
 
 export type SavingsContribution = { amount: number; date: string; source?: 'member profit' }
 export type SavingsWithdrawal = { amount: number; date: string; reason: string }
+export type DeletedSavingsTransaction = {
+  memberName: string
+  type: 'initial savings' | 'contribution' | 'withdrawal'
+  amount: number
+  date: string
+  details?: string
+  deletedAt: string
+}
 export type Member = {
   name: string
   accountEmail?: string
@@ -30,6 +38,18 @@ export type RemovedBorrowerTransaction = {
   borrowerName: string
   transaction: LoanTransaction
 }
+export type DeletedLoanRecord = {
+  borrowerId: string
+  borrowerName: string
+  email?: string
+  guarantorName?: string
+  loanAmount: number
+  interestRate: number
+  paydayInterest: number
+  createdAt: string
+  transaction?: LoanTransaction
+  deletedAt: string
+}
 export type ProfitTransfer = {
   amount: number
   date: string
@@ -44,6 +64,7 @@ export type ProfitCashout = {
   action?: 'cashout' | 'added to savings' | 'penalty'
   transferTotal?: number
 }
+export type DeletedProfitTransaction = ProfitCashout & { deletedAt: string }
 
 export type Borrower = {
   id: string
@@ -71,6 +92,9 @@ export type DatabaseDirectoryHandle = {
 
 const LOCAL_STORAGE_KEY = 'funds-organizer-members-v1'
 const LOCAL_PROFIT_CASHOUTS_KEY = 'funds-organizer-profit-cashouts-v1'
+const LOCAL_DELETED_SAVINGS_TRANSACTIONS_KEY = 'funds-organizer-deleted-savings-transactions-v1'
+const LOCAL_DELETED_PROFIT_TRANSACTIONS_KEY = 'funds-organizer-deleted-profit-transactions-v1'
+const LOCAL_DELETED_LOANS_KEY = 'funds-organizer-deleted-loans-v1'
 const DATABASE_FILE_NAME = 'funds-organizer-database.xlsx'
 const DIRECTORY_DATABASE_NAME = 'funds-organizer-directory'
 const DIRECTORY_STORE_NAME = 'settings'
@@ -116,6 +140,63 @@ export const loadSavedProfitCashouts = (): ProfitCashout[] => {
 export const saveProfitCashoutsLocally = (cashouts: ProfitCashout[]) => {
   try {
     localStorage.setItem(LOCAL_PROFIT_CASHOUTS_KEY, JSON.stringify(cashouts))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedDeletedSavingsTransactions = (): DeletedSavingsTransaction[] => {
+  try {
+    const savedTransactions = localStorage.getItem(LOCAL_DELETED_SAVINGS_TRANSACTIONS_KEY)
+    if (!savedTransactions) return []
+    const parsed: unknown = JSON.parse(savedTransactions)
+    return Array.isArray(parsed) ? parsed as DeletedSavingsTransaction[] : []
+  } catch {
+    return []
+  }
+}
+
+export const saveDeletedSavingsTransactionsLocally = (transactions: DeletedSavingsTransaction[]) => {
+  try {
+    localStorage.setItem(LOCAL_DELETED_SAVINGS_TRANSACTIONS_KEY, JSON.stringify(transactions))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedDeletedProfitTransactions = (): DeletedProfitTransaction[] => {
+  try {
+    const savedTransactions = localStorage.getItem(LOCAL_DELETED_PROFIT_TRANSACTIONS_KEY)
+    if (!savedTransactions) return []
+    const parsed: unknown = JSON.parse(savedTransactions)
+    return Array.isArray(parsed) ? parsed as DeletedProfitTransaction[] : []
+  } catch {
+    return []
+  }
+}
+
+export const saveDeletedProfitTransactionsLocally = (transactions: DeletedProfitTransaction[]) => {
+  try {
+    localStorage.setItem(LOCAL_DELETED_PROFIT_TRANSACTIONS_KEY, JSON.stringify(transactions))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedDeletedLoans = (): DeletedLoanRecord[] => {
+  try {
+    const savedLoans = localStorage.getItem(LOCAL_DELETED_LOANS_KEY)
+    if (!savedLoans) return []
+    const parsed: unknown = JSON.parse(savedLoans)
+    return Array.isArray(parsed) ? parsed as DeletedLoanRecord[] : []
+  } catch {
+    return []
+  }
+}
+
+export const saveDeletedLoansLocally = (loans: DeletedLoanRecord[]) => {
+  try {
+    localStorage.setItem(LOCAL_DELETED_LOANS_KEY, JSON.stringify(loans))
   } catch {
     // Keep the application usable when browser storage is unavailable.
   }
@@ -230,7 +311,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; profitCashouts: ProfitCashout[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; profitCashouts: ProfitCashout[]; deletedSavingsTransactions: DeletedSavingsTransaction[]; deletedProfitTransactions: DeletedProfitTransaction[]; deletedLoans: DeletedLoanRecord[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -451,7 +532,81 @@ export const readWorkbookData = async (
     }
   })
 
-  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts }
+  const deletedSavingsTransactions: DeletedSavingsTransaction[] = []
+  workbook.getWorksheet('Deleted Savings Transactions')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const memberName = String(row.getCell(1).value ?? '').trim()
+    const type = String(row.getCell(2).value ?? '').trim().toLowerCase()
+    const date = getCellDate(row.getCell(3).value)
+    const amount = Number(row.getCell(4).value)
+    const details = String(row.getCell(5).value ?? '').trim() || undefined
+    const deletedAt = getCellDate(row.getCell(6).value)
+    if (memberName && ['initial savings', 'contribution', 'withdrawal'].includes(type)
+      && Number.isFinite(amount) && date && deletedAt) {
+      deletedSavingsTransactions.push({
+        memberName,
+        type: type as DeletedSavingsTransaction['type'],
+        amount,
+        date,
+        details,
+        deletedAt,
+      })
+    }
+  })
+
+  const deletedProfitTransactions: DeletedProfitTransaction[] = []
+  workbook.getWorksheet('Deleted Profit Transactions')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const memberName = String(row.getCell(1).value ?? '').trim()
+    const amount = Number(row.getCell(2).value)
+    const date = getCellDate(row.getCell(3).value)
+    const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
+    const action = actionValue === 'added to savings' || actionValue === 'penalty' ? actionValue : 'cashout'
+    const transferTotalValue = Number(row.getCell(5).value)
+    const transferTotal = Number.isFinite(transferTotalValue) && transferTotalValue >= 0 ? transferTotalValue : undefined
+    const deletedAt = getCellDate(row.getCell(6).value)
+    if (memberName && Number.isFinite(amount) && amount > 0 && date && deletedAt) {
+      deletedProfitTransactions.push({ memberName, amount, date, action, transferTotal, deletedAt })
+    }
+  })
+
+  const deletedLoans: DeletedLoanRecord[] = []
+  workbook.getWorksheet('Deleted Loans')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const borrowerId = String(row.getCell(1).value ?? '').trim()
+    const borrowerName = String(row.getCell(2).value ?? '').trim()
+    const email = String(row.getCell(3).value ?? '').trim() || undefined
+    const guarantorName = String(row.getCell(4).value ?? '').trim() || undefined
+    const loanAmount = Number(row.getCell(5).value) || 0
+    const interestRate = Number(row.getCell(6).value) || 0
+    const paydayInterest = Number(row.getCell(7).value) || 0
+    const createdAt = getCellDate(row.getCell(8).value)
+    const transactionId = String(row.getCell(9).value ?? '').trim()
+    const transactionType = String(row.getCell(10).value ?? '').trim()
+    const transactionAmount = Number(row.getCell(11).value)
+    const transactionDate = getCellDate(row.getCell(12).value)
+    const deletedAt = getCellDate(row.getCell(13).value)
+    const validTransactionTypes: LoanTransaction['type'][] = ['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition']
+    if (!borrowerId || !borrowerName || !deletedAt) return
+    const transaction = transactionId && validTransactionTypes.includes(transactionType as LoanTransaction['type'])
+      && Number.isFinite(transactionAmount) && transactionDate
+      ? { id: transactionId, type: transactionType as LoanTransaction['type'], amount: transactionAmount, date: transactionDate }
+      : undefined
+    deletedLoans.push({
+      borrowerId,
+      borrowerName,
+      email,
+      guarantorName,
+      loanAmount,
+      interestRate,
+      paydayInterest,
+      createdAt,
+      transaction,
+      deletedAt,
+    })
+  })
+
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans }
 }
 
 export const writeWorkbookData = async (
@@ -462,6 +617,9 @@ export const writeWorkbookData = async (
   removedBorrowerTransactions: RemovedBorrowerTransaction[] = [],
   profitTransfers: ProfitTransfer[] = [],
   profitCashouts: ProfitCashout[] = [],
+  deletedSavingsTransactions: DeletedSavingsTransaction[] = [],
+  deletedProfitTransactions: DeletedProfitTransaction[] = [],
+  deletedLoans: DeletedLoanRecord[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -598,6 +756,95 @@ export const writeWorkbookData = async (
     cashout.transferTotal ?? '',
   ]))
 
+  const deletedSavingsSheet = workbook.addWorksheet('Deleted Savings Transactions')
+  deletedSavingsSheet.addTable({
+    name: 'DeletedSavingsTransactionsTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium6', showRowStripes: true },
+    columns: [
+      { name: 'Member' },
+      { name: 'Transaction Type' },
+      { name: 'Transaction Date' },
+      { name: 'Amount (PHP)' },
+      { name: 'Details' },
+      { name: 'Deleted At' },
+    ],
+    rows: deletedSavingsTransactions.map((transaction) => [
+      transaction.memberName,
+      transaction.type,
+      transaction.date,
+      transaction.amount,
+      transaction.details ?? '',
+      transaction.deletedAt,
+    ]),
+  })
+
+  const deletedProfitSheet = workbook.addWorksheet('Deleted Profit Transactions')
+  deletedProfitSheet.addTable({
+    name: 'DeletedProfitTransactionsTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium7', showRowStripes: true },
+    columns: [
+      { name: 'Member' },
+      { name: 'Amount (PHP)' },
+      { name: 'Transaction Date' },
+      { name: 'Action' },
+      { name: 'Transfer Total (PHP)' },
+      { name: 'Deleted At' },
+    ],
+    rows: deletedProfitTransactions.map((transaction) => [
+      transaction.memberName,
+      transaction.amount,
+      transaction.date,
+      transaction.action ?? 'cashout',
+      transaction.transferTotal ?? '',
+      transaction.deletedAt,
+    ]),
+  })
+
+  const deletedLoansSheet = workbook.addWorksheet('Deleted Loans')
+  deletedLoansSheet.addTable({
+    name: 'DeletedLoansTable',
+    ref: 'A1',
+    headerRow: true,
+    totalsRow: false,
+    style: { theme: 'TableStyleMedium3', showRowStripes: true },
+    columns: [
+      { name: 'Borrower ID' },
+      { name: 'Borrower' },
+      { name: 'Email' },
+      { name: 'Guarantor' },
+      { name: 'Loan Amount (PHP)' },
+      { name: 'Interest Rate (%)' },
+      { name: 'Payday Interest (PHP)' },
+      { name: 'Created At' },
+      { name: 'Transaction ID' },
+      { name: 'Transaction Type' },
+      { name: 'Transaction Amount (PHP)' },
+      { name: 'Transaction Date' },
+      { name: 'Deleted At' },
+    ],
+    rows: deletedLoans.map((loan) => [
+      loan.borrowerId,
+      loan.borrowerName,
+      loan.email ?? '',
+      loan.guarantorName ?? '',
+      loan.loanAmount,
+      loan.interestRate,
+      loan.paydayInterest,
+      loan.createdAt,
+      loan.transaction?.id ?? '',
+      loan.transaction?.type ?? '',
+      loan.transaction?.amount ?? '',
+      loan.transaction?.date ?? '',
+      loan.deletedAt,
+    ]),
+  })
+
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
   try {
@@ -622,5 +869,8 @@ export const writeWorkbookMembers = async (directory: DatabaseDirectoryHandle, m
     existingData?.removedBorrowerTransactions ?? [],
     existingData?.profitTransfers ?? [],
     existingData?.profitCashouts ?? [],
+    existingData?.deletedSavingsTransactions ?? [],
+    existingData?.deletedProfitTransactions ?? [],
+    existingData?.deletedLoans ?? [],
   )
 }

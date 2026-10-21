@@ -89,7 +89,8 @@ p {
 
 .nav-link,
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   cursor: pointer;
   border: none;
   font: inherit;
@@ -109,7 +110,8 @@ p {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   border-radius: 12px;
   padding: 0.9rem 1.2rem;
   font-weight: 600;
@@ -125,6 +127,26 @@ p {
   background: rgba(15, 23, 42, 0.7);
   color: #e2e8f0;
   border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.danger-button {
+  border: 1px solid rgba(248, 113, 113, 0.55);
+  background: #991b1b;
+  color: #fff;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.danger-button:focus-visible {
+  outline: 2px solid #fca5a5;
+  outline-offset: 2px;
+}
+
+.danger-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
 .login-button {
@@ -503,9 +525,52 @@ p {
 
 .borrower-directory-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.clear-loans-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.clear-loans-form label {
+  display: grid;
+  gap: 4px;
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.clear-loans-form input {
+  width: 160px;
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #f8fafc;
+  font: inherit;
+}
+
+.clear-loans-form input:focus-visible {
+  outline: 2px solid #f87171;
+  outline-offset: 2px;
+}
+
+.clear-loans-form .danger-button,
+.clear-loans-cancel {
+  padding: 0.55rem 0.8rem;
+}
+
+.clear-loans-error {
+  flex-basis: 100%;
+  color: #fca5a5;
+  font-size: 0.78rem;
 }
 
 .borrower-search {
