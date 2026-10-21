@@ -1556,7 +1556,7 @@ function ProfitsPage({
   totalInterestPaid: number
   totalReceivableInterest: number
   totalGroupAllowance: number
-  onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty') => void
+  onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty', memberProfit: number) => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
 }) {
   const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
@@ -1616,12 +1616,24 @@ function ProfitsPage({
   const settledTransfersByMember = new Map<string, number>()
   const legacyCashoutsByMember = new Map<string, number>()
   profitCashouts.forEach((cashout) => {
-    if (cashout.transferTotal !== undefined) {
+    if (cashout.action !== 'penalty' && cashout.transferTotal !== undefined) {
       settledTransfersByMember.set(
         cashout.memberName,
         Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
       )
-    } else if (cashout.action !== 'added to savings') {
+    }
+  })
+  const penaltyDeductionsByMember = new Map<string, number>()
+  profitCashouts.forEach((cashout) => {
+    if (cashout.action === 'penalty') {
+      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
+      if (cashout.transferTotal === undefined ? settledTransfers === undefined : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
+        penaltyDeductionsByMember.set(
+          cashout.memberName,
+          (penaltyDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+        )
+      }
+    } else if (cashout.transferTotal === undefined && cashout.action !== 'added to savings') {
       legacyCashoutsByMember.set(
         cashout.memberName,
         (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
@@ -1637,7 +1649,8 @@ function ProfitsPage({
       : Math.max(0, profitTransferred - settledTransfers)
     const grossProfitShare = profitTransferred > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
     const legacyCashouts = settledTransfers === undefined ? legacyCashoutsByMember.get(member.name) ?? 0 : 0
-    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts).toFixed(2))
+    const penaltyDeductions = penaltyDeductionsByMember.get(member.name) ?? 0
+    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions).toFixed(2))
     return { member, sharePercentage, profitShare }
   })
   const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'get profit'>>({})
@@ -1847,8 +1860,8 @@ function ProfitsPage({
                     <button
                       type="button"
                       className="secondary-button member-profit-deduct-button"
-                      disabled={profitShare <= 0}
-                      onClick={() => onApplyMemberProfitAction(member.name, profitShare, action)}
+                      disabled={profitShare <= 0 || profitShare > memberSavings}
+                      onClick={() => onApplyMemberProfitAction(member.name, profitShare, action, profitShare)}
                     >
                       {action === 'add to savings' ? 'Add profit' : 'Get profit'}
                     </button>
@@ -1872,9 +1885,9 @@ function ProfitsPage({
                     <button
                       type="button"
                       className="secondary-button member-profit-deduct-button"
-                      disabled={penaltyAmountValue === '' || !Number.isFinite(penaltyAmount) || penaltyAmount <= 0 || penaltyAmount > memberSavings}
+                      disabled={profitShare <= 0 || penaltyAmountValue === '' || !Number.isFinite(penaltyAmount) || penaltyAmount <= 0 || penaltyAmount > memberSavings}
                       onClick={() => {
-                        onApplyMemberProfitAction(member.name, penaltyAmount, 'penalty')
+                        onApplyMemberProfitAction(member.name, penaltyAmount, 'penalty', profitShare)
                         setMemberPenaltyAmounts((current) => ({ ...current, [member.name]: '' }))
                       }}
                     >
@@ -1898,7 +1911,7 @@ function ProfitsPage({
           <ul className="profit-interest-list">
             {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
               <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
-                <span>{cashout.memberName} · {cashout.action === 'added to savings' ? 'Added to savings' : 'Cashout'}</span>
+                <span>{cashout.memberName} · {cashout.action === 'added to savings' ? 'Added to savings' : cashout.action === 'penalty' ? 'Penalty to group allowance' : 'Cashout'}</span>
                 <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
                   {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
                 </strong>
@@ -2051,7 +2064,7 @@ function App() {
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
-    (memberTotal, withdrawal) => memberTotal + withdrawal.amount * 0.1,
+    (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
     0,
   ), 0)
   const registeredGuarantors = accounts
@@ -2322,7 +2335,12 @@ function App() {
     memberName: string,
     amount: number,
     action: 'add to savings' | 'get profit' | 'penalty',
+    memberProfit: number,
   ) => {
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || !Number.isFinite(amount) || amount <= 0 || amount > getMemberSavings(member)) return
+    if (action === 'penalty' && (!Number.isFinite(memberProfit) || memberProfit <= 0)) return
+
     const date = getLocalDate()
     const transferTotal = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
     if (action === 'add to savings') {
@@ -2347,7 +2365,19 @@ function App() {
       }])
       return
     }
+    const canEditMemberSavings = signedInRole === 'admin'
+      || (signedInRole === 'member'
+        && Boolean(signedInEmail.trim())
+        && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
+    if (!canEditMemberSavings) return
     pullOutSavings(memberName, amount, date, 'Profit penalty')
+    setProfitCashouts((currentCashouts) => [...currentCashouts, {
+      memberName,
+      amount,
+      date,
+      action: 'penalty',
+      transferTotal,
+    }])
   }
 
   const transferProfit = (dateFrom: string, dateTo: string) => {
@@ -2409,7 +2439,11 @@ function App() {
         && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
-        member.name === memberName && canEditMemberSavings(member)
+        member.name === memberName
+        && Number.isFinite(amount)
+        && amount > 0
+        && amount <= getMemberSavings(member)
+        && canEditMemberSavings(member)
           ? { ...member, withdrawals: [...member.withdrawals, { amount, date, reason }] }
           : member,
       ),

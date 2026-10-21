@@ -41,7 +41,7 @@ export type ProfitCashout = {
   memberName: string
   amount: number
   date: string
-  action?: 'cashout' | 'added to savings'
+  action?: 'cashout' | 'added to savings' | 'penalty'
   transferTotal?: number
 }
 
@@ -438,7 +438,7 @@ export const readWorkbookData = async (
     const amount = getCellNumber(row.getCell(2).value, `${memberName || 'Unknown member'}, profit cashout`)
     const date = getCellDate(row.getCell(3).value)
     const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
-    const action = actionValue === 'added to savings' ? 'added to savings' : 'cashout'
+    const action = actionValue === 'added to savings' || actionValue === 'penalty' ? actionValue : 'cashout'
     const transferTotalCell = row.getCell(5).value
     const transferTotalValue = transferTotalCell === null || transferTotalCell === undefined || transferTotalCell === ''
       ? Number.NaN
