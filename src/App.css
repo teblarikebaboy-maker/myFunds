@@ -858,6 +858,23 @@ p {
   overflow-wrap: anywhere;
 }
 
+.borrower-name-principal {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.borrower-name-principal > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.borrower-name-principal > span {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
 .borrower-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -978,6 +995,17 @@ p {
 .loan-transaction-date {
   color: #67e8f9;
   text-align: right;
+}
+
+.loan-transaction-reason {
+  grid-column: 1 / -1;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.loan-history-item .loan-transaction-reason {
+  font-weight: 400;
 }
 
 .transaction-type {
@@ -2367,6 +2395,10 @@ p {
   color: #334155;
 }
 
+.app-shell[data-theme='light'] .loan-transaction-reason {
+  color: #64748b;
+}
+
 .app-shell[data-theme='light'] .transaction-type.loan {
   background: #dbeafe;
   color: #1d4ed8;
@@ -2867,23 +2899,78 @@ p {
   padding-right: 6px;
 }
 
+.profits-member-summary-section {
+  padding: 18px;
+}
+
+.profits-member-summary-section > .panel-header {
+  margin-bottom: 12px;
+}
+
+.profits-member-summary-list {
+  display: grid;
+  gap: 5px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 0 6px 0 0;
+  margin: 0;
+  list-style: none;
+}
+
+.profits-member-summary-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.6fr) minmax(140px, 0.5fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.38);
+  font-size: 0.88rem;
+}
+
+.profits-member-summary-row > strong {
+  min-width: 0;
+  color: #dbeafe;
+  overflow-wrap: anywhere;
+}
+
+.profits-member-summary-row > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.profits-member-summary-row small {
+  color: #94a3b8;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.profits-member-summary-row b {
+  color: #99f6e4;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
 .profits-member-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
-  gap: 16px;
+  gap: 14px;
 }
 
 .profits-member-card {
-  position: relative;
   display: flex;
-  height: 100%;
   min-width: 0;
-  min-height: 280px;
+  min-height: 260px;
+  flex-direction: column;
   justify-content: flex-start;
   gap: 8px;
-  padding: 22px;
+  padding: 18px;
   border: 1px solid rgba(45, 212, 191, 0.22);
-  border-radius: 16px;
+  border-radius: 14px;
   background: linear-gradient(155deg, rgba(20, 38, 54, 0.96), rgba(15, 23, 42, 0.9));
   box-shadow: inset 0 1px 0 rgba(226, 232, 240, 0.04), 0 8px 20px rgba(2, 6, 23, 0.12);
 }
@@ -2896,9 +2983,8 @@ p {
 }
 
 .profits-member-card > strong {
-  margin-top: 2px;
   color: #99f6e4;
-  font-size: clamp(1.45rem, 2vw, 1.75rem);
+  font-size: clamp(1.35rem, 1.8vw, 1.65rem);
   line-height: 1.2;
   overflow-wrap: anywhere;
 }
@@ -2908,9 +2994,10 @@ p {
 }
 
 .profits-member-card .member-profit-actions {
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
   margin-top: auto;
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid rgba(148, 163, 184, 0.14);
 }
 
@@ -2918,13 +3005,12 @@ p {
 .profits-member-card .member-profit-penalty-action {
   grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
-  gap: 8px;
+  gap: 7px;
 }
 
 .profits-member-card .member-profit-deduct-button {
-  min-height: 44px;
+  min-height: 40px;
   width: 100%;
-  padding: 0.7rem 0.9rem;
 }
 
 .profits-member-card .member-profit-actions label {
@@ -2934,19 +3020,10 @@ p {
 
 .profits-member-card .member-profit-actions select,
 .profits-member-card .member-profit-actions input {
-  min-height: 44px;
+  min-height: 40px;
   border-color: rgba(148, 163, 184, 0.24);
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(2, 6, 23, 0.48);
-}
-
-.profits-member-card .member-profit-deduct-button:not(:disabled) {
-  border-color: rgba(45, 212, 191, 0.28);
-  background: rgba(15, 118, 110, 0.2);
-}
-
-.profits-member-card .member-profit-deduct-button:not(:disabled):hover {
-  background: rgba(15, 118, 110, 0.36);
 }
 
 .profits-payouts-section .panel-header {
@@ -2998,9 +3075,21 @@ p {
   background: linear-gradient(160deg, rgba(30, 41, 59, 0.72), rgba(15, 23, 42, 0.9));
 }
 
-.app-shell[data-theme='dark'] .profits-member-card {
-  border-color: rgba(45, 212, 191, 0.22);
-  background: linear-gradient(155deg, rgba(20, 38, 54, 0.96), rgba(15, 23, 42, 0.9));
+.app-shell[data-theme='light'] .profits-member-summary-row {
+  border-color: rgba(13, 148, 136, 0.18);
+  background: #f8fafc;
+}
+
+.app-shell[data-theme='light'] .profits-member-summary-row > strong {
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .profits-member-summary-row small {
+  color: #64748b;
+}
+
+.app-shell[data-theme='light'] .profits-member-summary-row b {
+  color: #0f766e;
 }
 
 .app-shell[data-theme='light'] .profits-member-card {
@@ -3009,7 +3098,8 @@ p {
   box-shadow: inset 0 1px 0 #fff, 0 8px 20px rgba(15, 23, 42, 0.05);
 }
 
-.app-shell[data-theme='light'] .profits-member-card > span {
+.app-shell[data-theme='light'] .profits-member-card > span,
+.app-shell[data-theme='light'] .profits-member-card .member-profit-actions label {
   color: #334155;
 }
 
@@ -3023,10 +3113,6 @@ p {
 
 .app-shell[data-theme='light'] .profits-member-card .member-profit-actions {
   border-top-color: rgba(100, 116, 139, 0.16);
-}
-
-.app-shell[data-theme='light'] .profits-member-card .member-profit-actions label {
-  color: #475569;
 }
 
 .app-shell[data-theme='light'] .profits-member-card .member-profit-actions select,
@@ -3053,12 +3139,12 @@ p {
 }
 
 @media (max-width: 980px) {
-  .profits-member-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .profits-summary-grid > .summary-card:not(.profits-net-profit-card) {
     min-height: 130px;
+  }
+
+  .profits-member-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3114,13 +3200,27 @@ p {
     width: 100%;
   }
 
+  .profits-member-summary-row {
+    grid-template-columns: minmax(0, 1fr) minmax(90px, 0.6fr) minmax(85px, 0.5fr);
+    gap: 12px;
+  }
+
   .profits-member-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .profits-member-card {
     min-height: 0;
-    height: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .profits-member-summary-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profits-member-summary-row > strong {
+    grid-column: 1 / -1;
   }
 
   .profits-payouts-section .panel-header {
