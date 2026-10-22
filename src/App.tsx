@@ -33,7 +33,8 @@ import {
 } from './database'
 import './App.css'
 
-type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data'
+type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data' | 'group-update'
+type BorrowerDirectoryFilter = 'all' | 'active' | 'paid'
 type ChartStyle = 'bar' | 'line'
 type SavingsTransaction = {
   id: string
@@ -184,6 +185,7 @@ const tabs: Array<{ id: TabKey; label: string }> = [
   { id: 'savings', label: 'Savings' },
   { id: 'loans', label: 'Loans' },
   { id: 'profits', label: 'Profits' },
+  { id: 'group-update', label: 'Group Update' },
   { id: 'data', label: 'Data' },
 ]
 
@@ -609,7 +611,9 @@ function SavingsPage({
       return
     }
 
-    if (amount > getMemberSavings(member)) {
+    const amountInCents = Math.round(amount * 100)
+    const savingsInCents = Math.round(getMemberSavings(member) * 100)
+    if (amountInCents > savingsInCents) {
       setWithdrawalError('The pull-out amount cannot exceed this member’s savings.')
       return
     }
@@ -619,7 +623,7 @@ function SavingsPage({
       return
     }
 
-    onPullOutSavings(memberName, amount, withdrawalDate, withdrawalReason.trim())
+    onPullOutSavings(memberName, amountInCents / 100, withdrawalDate, withdrawalReason.trim())
     setWithdrawalAmount('')
     setWithdrawalDate(getLocalDate())
     setWithdrawalReason('')
@@ -1127,6 +1131,7 @@ function LoansPage({
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
   const [principalAdditionError, setPrincipalAdditionError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
+  const [borrowerDirectoryFilter, setBorrowerDirectoryFilter] = useState<BorrowerDirectoryFilter>('all')
   const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
   const [clearAdminPassword, setClearAdminPassword] = useState('')
   const [clearConfirmationText, setClearConfirmationText] = useState('')
@@ -1137,6 +1142,28 @@ function LoansPage({
   const filteredBorrowers = borrowers.filter((borrower) =>
     borrower.name.toLowerCase().includes(borrowerSearch.trim().toLowerCase()),
   )
+  const allBorrowerSections = [
+    {
+      title: 'Active loans',
+      borrowers: filteredBorrowers.filter((borrower) =>
+        hasOutstandingBorrowerBalance(borrower.loanAmount)
+        || hasOutstandingBorrowerBalance(borrower.paydayInterest),
+      ),
+    },
+    {
+      title: 'Fully paid',
+      borrowers: filteredBorrowers.filter((borrower) =>
+        !hasOutstandingBorrowerBalance(borrower.loanAmount)
+        && !hasOutstandingBorrowerBalance(borrower.paydayInterest),
+      ),
+    },
+  ]
+  const borrowerSections = allBorrowerSections.filter((section) =>
+    borrowerDirectoryFilter === 'all'
+    || (borrowerDirectoryFilter === 'active' && section.title === 'Active loans')
+    || (borrowerDirectoryFilter === 'paid' && section.title === 'Fully paid'),
+  )
+  const visibleBorrowerCount = borrowerSections.reduce((total, section) => total + section.borrowers.length, 0)
   const loanHistory = borrowers
     .flatMap((borrower) => (borrower.transactions ?? []).map((transaction) => ({
       ...transaction,
@@ -1249,6 +1276,10 @@ function LoansPage({
 
   const handlePayBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
     event.preventDefault()
+    if (hasOutstandingBorrowerBalance(borrower.paydayInterest)) {
+      setPrincipalPaymentError('Pay all outstanding interest before paying principal.')
+      return
+    }
     const amount = Number(principalPaymentAmount)
     if (principalPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
       setPrincipalPaymentError('Enter an amount greater than zero.')
@@ -1451,21 +1482,38 @@ function LoansPage({
                 Clear loans
               </button>
             ))}
+            <select
+              className="borrower-filter"
+              aria-label="Filter borrowers by loan status"
+              value={borrowerDirectoryFilter}
+              onChange={(event) => setBorrowerDirectoryFilter(event.target.value as BorrowerDirectoryFilter)}
+            >
+              <option value="all">All</option>
+              <option value="active">Active</option>
+              <option value="paid">Fully paid</option>
+            </select>
             <input
               className="borrower-search"
               type="search"
-              aria-label="Search borrowers"
+              aria-label="Search active and fully paid borrowers"
               value={borrowerSearch}
               onChange={(event) => setBorrowerSearch(event.target.value)}
-              placeholder="Search borrowers"
+              placeholder="Search all borrowers"
             />
-            <span className="meta-pill">{borrowers.length} total</span>
+            <span className="meta-pill">{visibleBorrowerCount} shown</span>
           </div>
         </div>
         {borrowers.length > 0 ? (
-          filteredBorrowers.length > 0 ? (
-            <ul className="borrower-list">
-            {filteredBorrowers.map((borrower) => (
+          visibleBorrowerCount > 0 ? (
+            <div className="borrower-groups">
+              {borrowerSections.map((section) => section.borrowers.length > 0 && (
+                <section key={section.title} className="borrower-group" aria-label={section.title}>
+                  <div className="borrower-group-heading">
+                    <h4>{section.title}</h4>
+                    <span>{section.borrowers.length}</span>
+                  </div>
+                  <ul className="borrower-list">
+                    {section.borrowers.map((borrower) => (
               <li key={borrower.id} className="borrower-item">
                 <div className="borrower-item-header">
                   <strong>{borrower.name}</strong>
@@ -1480,7 +1528,7 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      disabled={borrower.loanAmount <= 0}
+                      disabled={borrower.loanAmount <= 0 || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
                       onClick={() => {
                         setPayingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalPaymentAmount('')
@@ -1678,9 +1726,16 @@ function LoansPage({
                 </div>
               </li>
             ))}
-            </ul>
+                  </ul>
+                </section>
+              ))}
+            </div>
           ) : (
-            <p className="savings-history-empty">No borrowers match “{borrowerSearch}”.</p>
+            <p className="savings-history-empty">
+              {borrowerSearch.trim()
+                ? `No borrowers match “${borrowerSearch}” in this view.`
+                : 'No borrowers in this view.'}
+            </p>
           )
         ) : (
           <p className="savings-history-empty">No borrowers added yet.</p>
@@ -2762,6 +2817,7 @@ function App() {
   }
 
   const pullOutSavings = (memberName: string, amount: number, date: string, reason: string) => {
+    const amountInCents = Math.round(amount * 100)
     const canEditMemberSavings = (member: Member) =>
       signedInRole === 'admin'
       || (signedInRole === 'member'
@@ -2771,10 +2827,10 @@ function App() {
       currentMembers.map((member) =>
         member.name === memberName
         && Number.isFinite(amount)
-        && amount > 0
-        && amount <= getMemberSavings(member)
+        && amountInCents > 0
+        && amountInCents <= Math.round(getMemberSavings(member) * 100)
         && canEditMemberSavings(member)
-          ? { ...member, withdrawals: [...member.withdrawals, { amount, date, reason }] }
+          ? { ...member, withdrawals: [...member.withdrawals, { amount: amountInCents / 100, date, reason }] }
           : member,
       ),
     )
@@ -3032,7 +3088,9 @@ function App() {
   const payBorrowerPrincipal = (borrowerId: string, amount: number) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
-      if (borrower.id !== borrowerId || amount > borrower.loanAmount) return borrower
+      if (borrower.id !== borrowerId
+        || hasOutstandingBorrowerBalance(borrower.paydayInterest)
+        || amount > borrower.loanAmount) return borrower
       const remainingPrincipal = Number((borrower.loanAmount - amount).toFixed(2))
       const nextTransaction = {
         id: crypto.randomUUID(),
@@ -3153,6 +3211,17 @@ function App() {
             canChooseDatabaseFolder={canChooseDatabaseFolder}
             onChooseDatabaseFolder={handleChooseDatabaseFolder}
           />
+        )
+      case 'group-update':
+        return (
+          <main className="page-view">
+            <section className="page-header">
+              <div>
+                <p className="eyebrow">Group</p>
+                <h2>Group Update</h2>
+              </div>
+            </section>
+          </main>
         )
       case 'overview':
       default:

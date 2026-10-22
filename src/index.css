@@ -2,7 +2,7 @@
   font-family: Inter, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #e2e8f0;
+  color: #f1f5f9;
   background:
     radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 24%),
     radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.2), transparent 24%),
@@ -15,7 +15,7 @@
 }
 
 :root[data-theme='light'] {
-  color: #1e293b;
+  color: #0f172a;
   background:
     radial-gradient(circle at top left, rgba(14, 165, 233, 0.13), transparent 26%),
     radial-gradient(circle at bottom right, rgba(45, 212, 191, 0.12), transparent 26%),
