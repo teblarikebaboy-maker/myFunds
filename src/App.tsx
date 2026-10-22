@@ -45,19 +45,29 @@ type SavingsTransaction = {
   date: string
   reason?: string
   fee?: number
+  previousAmount?: number
+  newAmount?: number
 }
+
+const getSavingsAdjustmentTotal = (member: Member) =>
+  (member.adjustments ?? []).reduce(
+    (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
+    0,
+  )
 
 const getMemberSavings = (member: Member) =>
   member.initialSavings
   + member.contributions.reduce((total, contribution) => total + contribution.amount, 0)
   - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
+  + getSavingsAdjustmentTotal(member)
 
 const getMemberProfitShareSavings = (member: Member) =>
   Math.max(0, member.initialSavings
     + member.contributions
       .filter((contribution) => contribution.source !== 'member profit')
       .reduce((total, contribution) => total + contribution.amount, 0)
-    - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0))
+    - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
+    + getSavingsAdjustmentTotal(member))
 
 const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
   {
@@ -82,6 +92,16 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
     date: withdrawal.date,
     reason: withdrawal.reason,
     fee: withdrawal.amount * 0.1,
+  })),
+  ...(member.adjustments ?? []).map((adjustment) => ({
+    id: adjustment.id,
+    member: member.name,
+    type: 'Savings adjustment',
+    amount: adjustment.newAmount - adjustment.previousAmount,
+    date: adjustment.date,
+    reason: adjustment.reason,
+    previousAmount: adjustment.previousAmount,
+    newAmount: adjustment.newAmount,
   })),
 ].sort((first, second) => second.date.localeCompare(first.date))
 
@@ -118,6 +138,7 @@ const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[
       initialSavingsDate: getLocalDate(),
       contributions: [],
       withdrawals: [],
+      adjustments: [],
     })
   })
 
@@ -140,6 +161,9 @@ type OverviewCashOutTransaction = {
   type: string
   amount: number
   date: string
+  reason?: string
+  previousAmount?: number
+  newAmount?: number
 }
 
 const getOverviewCashOutTransactions = (
@@ -172,6 +196,18 @@ const getOverviewCashOutTransactions = (
     amount: withdrawal.amount,
     date: withdrawal.date,
   }))),
+  ...members.flatMap((member) => (member.adjustments ?? [])
+    .filter((adjustment) => adjustment.newAmount < adjustment.previousAmount)
+    .map((adjustment) => ({
+      id: `adjustment-${member.name}-${adjustment.id}`,
+      name: member.name,
+      type: 'Savings adjustment',
+      amount: adjustment.previousAmount - adjustment.newAmount,
+      date: adjustment.date,
+      reason: adjustment.reason,
+      previousAmount: adjustment.previousAmount,
+      newAmount: adjustment.newAmount,
+    }))),
 ].sort((first, second) => second.date.localeCompare(first.date))
 
 type OverviewCashInTransaction = {
@@ -180,6 +216,9 @@ type OverviewCashInTransaction = {
   type: string
   amount: number
   date: string
+  reason?: string
+  previousAmount?: number
+  newAmount?: number
 }
 
 const getOverviewCashInTransactions = (
@@ -194,6 +233,18 @@ const getOverviewCashInTransactions = (
     amount: contribution.amount,
     date: contribution.date,
   }))),
+  ...members.flatMap((member) => (member.adjustments ?? [])
+    .filter((adjustment) => adjustment.newAmount > adjustment.previousAmount)
+    .map((adjustment) => ({
+      id: `adjustment-${member.name}-${adjustment.id}`,
+      name: member.name,
+      type: 'Savings adjustment',
+      amount: adjustment.newAmount - adjustment.previousAmount,
+      date: adjustment.date,
+      reason: adjustment.reason,
+      previousAmount: adjustment.previousAmount,
+      newAmount: adjustment.newAmount,
+    }))),
   ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
     .filter((transaction) => transaction.type === 'interest-payment' || transaction.type === 'principal-payment')
     .map((transaction) => ({
@@ -537,7 +588,12 @@ function OverviewPage({
                 <li key={transaction.id} className="transaction-item">
                   <div>
                     <strong>{transaction.name} · {transaction.type}</strong>
-                    <small>{formatDate(transaction.date)}</small>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                    </small>
                   </div>
                   <span className="positive">+{formatBorrowerCurrency(transaction.amount)}</span>
                 </li>
@@ -562,7 +618,12 @@ function OverviewPage({
                 <li key={transaction.id} className="bill-item">
                   <div>
                     <strong>{transaction.name} · {transaction.type}</strong>
-                    <small>{formatDate(transaction.date)}</small>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                    </small>
                   </div>
                   <span className="negative">-{formatBorrowerCurrency(transaction.amount)}</span>
                 </li>
@@ -588,6 +649,7 @@ type SavingsPageProps = {
   onMemberChange: (member: string) => void
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
+  onEditMemberSavings: (memberName: string, amount: number, reason: string, date: string) => void
   onDeleteMember: (memberName: string, adminPassword: string) => Promise<{ success: boolean; message?: string }>
   onClearSavingsTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }
@@ -801,11 +863,17 @@ function SavingsPage({
   onMemberChange,
   onAddSavings,
   onPullOutSavings,
+  onEditMemberSavings,
   onDeleteMember,
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
   const [deletingMemberName, setDeletingMemberName] = useState<string | null>(null)
+  const [editingSavingsMemberName, setEditingSavingsMemberName] = useState<string | null>(null)
+  const [editedSavingsAmount, setEditedSavingsAmount] = useState('')
+  const [savingsEditDate, setSavingsEditDate] = useState(getLocalDate)
+  const [savingsEditReason, setSavingsEditReason] = useState('')
+  const [savingsEditError, setSavingsEditError] = useState('')
   const [deleteAdminPassword, setDeleteAdminPassword] = useState('')
   const [deleteMemberError, setDeleteMemberError] = useState('')
   const [isDeletingMember, setIsDeletingMember] = useState(false)
@@ -835,6 +903,32 @@ function SavingsPage({
     } finally {
       setIsDeletingMember(false)
     }
+  }
+
+  const handleEditMemberSavings = (event: FormEvent<HTMLFormElement>, member: Member) => {
+    event.preventDefault()
+    const amount = Number(editedSavingsAmount)
+    const amountInCents = Math.round(amount * 100)
+    if (editedSavingsAmount === '' || !Number.isFinite(amount) || amount < 0
+      || !Number.isSafeInteger(amountInCents)) {
+      setSavingsEditError('Enter a valid savings amount of zero or more.')
+      return
+    }
+    if (!savingsEditDate || !savingsEditReason.trim()) {
+      setSavingsEditError('Choose a date and enter a reason for this adjustment.')
+      return
+    }
+    if (amountInCents === Math.round(getMemberSavings(member) * 100)) {
+      setSavingsEditError('Enter an amount different from the current savings.')
+      return
+    }
+
+    onEditMemberSavings(member.name, amountInCents / 100, savingsEditReason.trim(), savingsEditDate)
+    setEditingSavingsMemberName(null)
+    setEditedSavingsAmount('')
+    setSavingsEditDate(getLocalDate())
+    setSavingsEditReason('')
+    setSavingsEditError('')
   }
 
   const handleClearSavingsTransactions = async (event: FormEvent<HTMLFormElement>) => {
@@ -966,17 +1060,42 @@ function SavingsPage({
                   <div className="savings-member-header">
                     <strong>{member.name}</strong>
                     {isAdmin && (
-                      <button
-                        type="button"
-                        className="secondary-button delete-member-button"
-                        onClick={() => {
-                          setDeletingMemberName((currentName) => currentName === member.name ? null : member.name)
-                          setDeleteAdminPassword('')
-                          setDeleteMemberError('')
-                        }}
-                      >
-                        {deletingMemberName === member.name ? 'Cancel' : 'Delete'}
-                      </button>
+                      <div className="savings-member-header-actions">
+                        <button
+                          type="button"
+                          className="secondary-button edit-member-button"
+                          onClick={() => {
+                            if (editingSavingsMemberName === member.name) {
+                              setEditingSavingsMemberName(null)
+                              setSavingsEditError('')
+                              return
+                            }
+                            setEditingSavingsMemberName(member.name)
+                            setEditedSavingsAmount(getMemberSavings(member).toFixed(2))
+                            setSavingsEditDate(getLocalDate())
+                            setSavingsEditReason('')
+                            setSavingsEditError('')
+                            setDeletingMemberName(null)
+                            setDeleteAdminPassword('')
+                            setDeleteMemberError('')
+                          }}
+                        >
+                          {editingSavingsMemberName === member.name ? 'Cancel' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button delete-member-button"
+                          onClick={() => {
+                            setDeletingMemberName((currentName) => currentName === member.name ? null : member.name)
+                            setDeleteAdminPassword('')
+                            setDeleteMemberError('')
+                            setEditingSavingsMemberName(null)
+                            setSavingsEditError('')
+                          }}
+                        >
+                          {deletingMemberName === member.name ? 'Cancel' : 'Delete'}
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div className="savings-member-metrics">
@@ -994,6 +1113,59 @@ function SavingsPage({
                         .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
                     </div>
                   </div>
+                  {isAdmin && editingSavingsMemberName === member.name && (
+                    <form
+                      className="edit-member-savings-form"
+                      noValidate
+                      onSubmit={(event) => handleEditMemberSavings(event, member)}
+                    >
+                      <p>
+                        Current savings: {formatCurrency(getMemberSavings(member))}. Saving a new amount creates a
+                        transaction showing the before and after balances.
+                      </p>
+                      <label>
+                        New savings amount (PHP)
+                        <input
+                          autoFocus
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editedSavingsAmount}
+                          onChange={(event) => {
+                            setEditedSavingsAmount(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Date
+                        <input
+                          type="date"
+                          required
+                          value={savingsEditDate}
+                          onChange={(event) => {
+                            setSavingsEditDate(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Reason
+                        <input
+                          type="text"
+                          required
+                          value={savingsEditReason}
+                          onChange={(event) => {
+                            setSavingsEditReason(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                          placeholder="Reason for adjustment"
+                        />
+                      </label>
+                      <button type="submit" className="primary-button">Save adjustment</button>
+                      {savingsEditError && <p className="member-error" role="alert">{savingsEditError}</p>}
+                    </form>
+                  )}
                   {canEditSavings && (
                     <>
                       <AddMemberSavingsForm memberName={member.name} onAddSavings={onAddSavings} />
@@ -1037,6 +1209,8 @@ function SavingsPage({
                             <small>
                               {formatDate(transaction.date)}
                               {transaction.reason && ` · ${transaction.reason}`}
+                              {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
                             </small>
                           </div>
                           <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
@@ -1132,6 +1306,8 @@ function SavingsPage({
                   <small>
                     {formatDate(transaction.date)}
                     {transaction.reason && ` · ${transaction.reason}`}
+                    {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                      && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
                     {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
                   </small>
                 </div>
@@ -2063,6 +2239,7 @@ function ProfitsPage({
 }) {
   const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
   const [profitDateTo, setProfitDateTo] = useState(getLocalDate)
+  const [selectedProfitTransferDate, setSelectedProfitTransferDate] = useState('')
   const [isTransferFormOpen, setIsTransferFormOpen] = useState(false)
   const [transferDateFrom, setTransferDateFrom] = useState(`${currentYear}-01-01`)
   const [transferDateTo, setTransferDateTo] = useState(getLocalDate)
@@ -2073,6 +2250,12 @@ function ProfitsPage({
   const [clearProfitError, setClearProfitError] = useState('')
   const [isClearingProfit, setIsClearingProfit] = useState(false)
   const profitTransferred = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
+  const profitTransferDates = [...new Set(profitTransfers.map((transfer) => transfer.date))]
+    .sort((first, second) => second.localeCompare(first))
+  const activeProfitTransferDate = profitTransferDates.includes(selectedProfitTransferDate)
+    ? selectedProfitTransferDate
+    : profitTransferDates[0] ?? ''
+  const selectedProfitTransfers = profitTransfers.filter((transfer) => transfer.date === activeProfitTransferDate)
   const profitBalance = Number(Math.max(0, totalInterestPaid - profitTransferred).toFixed(2))
   const interestPayments = [
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
@@ -2243,7 +2426,29 @@ function ProfitsPage({
                   </div>
                   <div>
                     <span>Profit transferred</span>
-                    <strong>{formatCurrency(profitTransferred)}</strong>
+                    {profitTransfers.length > 0 ? (
+                      <>
+                        <select
+                          className="profit-transfer-date-select"
+                          aria-label="Select profit transfer date"
+                          value={activeProfitTransferDate}
+                          onChange={(event) => setSelectedProfitTransferDate(event.target.value)}
+                        >
+                          {profitTransferDates.map((date) => (
+                            <option key={date} value={date}>{formatDate(date)}</option>
+                          ))}
+                        </select>
+                        <ul className="profit-transfer-history">
+                          {selectedProfitTransfers.map((transfer, index) => (
+                            <li key={`${transfer.date}-${index}`}>
+                              <strong>{formatCurrency(transfer.amount)}</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <small className="profit-transfer-empty">No transfers yet.</small>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -3346,6 +3551,27 @@ function App() {
     )
   }
 
+  const editMemberSavings = (memberName: string, amount: number, reason: string, date: string) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
+      || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim() || !date) return
+    const newAmount = Number(amount.toFixed(2))
+    setMembers((currentMembers) => currentMembers.map((member) => {
+      if (member.name !== memberName) return member
+      const previousAmount = Number(getMemberSavings(member).toFixed(2))
+      if (previousAmount === newAmount) return member
+      return {
+        ...member,
+        adjustments: [...(member.adjustments ?? []), {
+          id: crypto.randomUUID(),
+          previousAmount,
+          newAmount,
+          date,
+          reason: reason.trim(),
+        }],
+      }
+    }))
+  }
+
   const applyMemberProfitAction = (
     memberName: string,
     amount: number,
@@ -3547,6 +3773,16 @@ function App() {
         details: withdrawal.reason,
         deletedAt: resetDate,
       })),
+      ...(member.adjustments ?? []).map((adjustment) => ({
+        memberName: member.name,
+        type: 'adjustment' as const,
+        amount: Number((adjustment.newAmount - adjustment.previousAmount).toFixed(2)),
+        date: adjustment.date,
+        details: adjustment.reason,
+        previousAmount: adjustment.previousAmount,
+        newAmount: adjustment.newAmount,
+        deletedAt: resetDate,
+      })),
     ])
     setDeletedSavingsTransactions((currentTransactions) => [
       ...currentTransactions,
@@ -3558,6 +3794,7 @@ function App() {
       initialSavingsDate: resetDate,
       contributions: [],
       withdrawals: [],
+      adjustments: [],
     })))
     return { success: true }
   }
@@ -3804,6 +4041,7 @@ function App() {
             onMemberChange={() => undefined}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onEditMemberSavings={editMemberSavings}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />
@@ -3825,6 +4063,7 @@ function App() {
             onMemberChange={setSelectedMember}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onEditMemberSavings={editMemberSavings}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />

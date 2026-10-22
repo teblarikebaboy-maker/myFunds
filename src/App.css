@@ -697,6 +697,12 @@ p {
   overflow-wrap: anywhere;
 }
 
+.savings-member-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .savings-member-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -744,6 +750,50 @@ p {
   flex: 0 0 auto;
   width: auto;
   padding: 0.55rem 0.8rem;
+}
+
+.edit-member-button {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0.55rem 0.8rem;
+}
+
+.edit-member-savings-form {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  border-radius: 12px;
+  background: rgba(30, 64, 175, 0.12);
+}
+
+.edit-member-savings-form p {
+  margin: 0;
+  color: #bfdbfe;
+  font-size: 0.85rem;
+}
+
+.edit-member-savings-form label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.edit-member-savings-form input {
+  min-width: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.edit-member-savings-form button {
+  justify-self: start;
 }
 
 .delete-member-form {
@@ -1276,6 +1326,49 @@ p {
 .profits-net-profit-details strong {
   color: #0f172a;
   font-size: 1.2rem;
+}
+
+.profit-transfer-date-select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid rgba(29, 78, 216, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #0f172a;
+  font: inherit;
+}
+
+.profit-transfer-history {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 0;
+  margin: 4px 0 0;
+  list-style: none;
+}
+
+.profit-transfer-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.profit-transfer-history li strong {
+  color: #0f172a;
+  font-size: 0.95rem;
+}
+
+.profit-transfer-history time,
+.profit-transfer-empty {
+  color: #475569;
+  font-size: 0.8rem;
 }
 
 .profits-net-profit-details button {
@@ -2316,6 +2409,25 @@ p {
 .app-shell[data-theme='light'] .delete-member-form {
   border-color: rgba(220, 38, 38, 0.24);
   background: #fff1f2;
+}
+
+.app-shell[data-theme='light'] .edit-member-savings-form {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: #eff6ff;
+}
+
+.app-shell[data-theme='light'] .edit-member-savings-form p {
+  color: #1e40af;
+}
+
+.app-shell[data-theme='light'] .edit-member-savings-form label {
+  color: #334155;
+}
+
+.app-shell[data-theme='light'] .edit-member-savings-form input {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  color: #0f172a;
 }
 
 .app-shell[data-theme='light'] .delete-member-form p {

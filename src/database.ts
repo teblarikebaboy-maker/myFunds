@@ -2,12 +2,21 @@ import type ExcelJS from 'exceljs'
 
 export type SavingsContribution = { amount: number; date: string; source?: 'member profit' }
 export type SavingsWithdrawal = { amount: number; date: string; reason: string }
+export type SavingsAdjustment = {
+  id: string
+  previousAmount: number
+  newAmount: number
+  date: string
+  reason: string
+}
 export type DeletedSavingsTransaction = {
   memberName: string
-  type: 'initial savings' | 'contribution' | 'withdrawal'
+  type: 'initial savings' | 'contribution' | 'withdrawal' | 'adjustment'
   amount: number
   date: string
   details?: string
+  previousAmount?: number
+  newAmount?: number
   deletedAt: string
 }
 export type Member = {
@@ -17,6 +26,7 @@ export type Member = {
   initialSavingsDate: string
   contributions: SavingsContribution[]
   withdrawals: SavingsWithdrawal[]
+  adjustments?: SavingsAdjustment[]
 }
 export type AccountRole = 'admin' | 'member'
 export type DatabaseAccount = {
@@ -361,6 +371,7 @@ export const readWorkbookData = async (
       initialSavingsDate: getCellDate(row.getCell(3).value),
       contributions: [],
       withdrawals: [],
+      adjustments: [],
       accountEmail: String(row.getCell(4).value ?? '').trim().toLowerCase() || undefined,
     })
   })
@@ -393,6 +404,25 @@ export const readWorkbookData = async (
       amount: getCellNumber(row.getCell(3).value, `${name}, withdrawal`),
       reason: String(row.getCell(4).value ?? ''),
     })
+  })
+
+  workbook.getWorksheet('Savings Adjustments')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const name = String(row.getCell(1).value ?? '').trim()
+    if (!name) return
+    const member = members.get(name)
+    if (!member) throw new Error(`Excel savings adjustment refers to unknown member "${name}".`)
+    const id = String(row.getCell(2).value ?? '').trim()
+    const date = getCellDate(row.getCell(3).value)
+    const previousAmount = Number(row.getCell(4).value)
+    const newAmount = Number(row.getCell(5).value)
+    const reason = String(row.getCell(6).value ?? '').trim()
+    if (!id || !date || !Number.isFinite(previousAmount) || previousAmount < 0
+      || !Number.isFinite(newAmount) || newAmount < 0 || !reason) {
+      throw new Error(`Excel savings adjustment for "${name}" has invalid details.`)
+    }
+    member.adjustments ??= []
+    member.adjustments.push({ id, date, previousAmount, newAmount, reason })
   })
 
   const accounts: DatabaseAccount[] = []
@@ -590,14 +620,19 @@ export const readWorkbookData = async (
     const amount = Number(row.getCell(4).value)
     const details = String(row.getCell(5).value ?? '').trim() || undefined
     const deletedAt = getCellDate(row.getCell(6).value)
-    if (memberName && ['initial savings', 'contribution', 'withdrawal'].includes(type)
-      && Number.isFinite(amount) && date && deletedAt) {
+    const previousAmount = Number(row.getCell(7).value)
+    const newAmount = Number(row.getCell(8).value)
+    if (memberName && ['initial savings', 'contribution', 'withdrawal', 'adjustment'].includes(type)
+      && Number.isFinite(amount) && date && deletedAt
+      && (type !== 'adjustment'
+        || (Number.isFinite(previousAmount) && Number.isFinite(newAmount) && Boolean(details)))) {
       deletedSavingsTransactions.push({
         memberName,
         type: type as DeletedSavingsTransaction['type'],
         amount,
         date,
         details,
+        ...(type === 'adjustment' ? { previousAmount, newAmount } : {}),
         deletedAt,
       })
     }
@@ -701,6 +736,19 @@ export const writeWorkbookData = async (
   withdrawalsSheet.addRow(['Member', 'Date', 'Amount', 'Reason'])
   members.forEach((member) => member.withdrawals.forEach((withdrawal) => {
     withdrawalsSheet.addRow([member.name, withdrawal.date, withdrawal.amount, withdrawal.reason])
+  }))
+
+  const savingsAdjustmentsSheet = workbook.addWorksheet('Savings Adjustments')
+  savingsAdjustmentsSheet.addRow(['Member', 'Transaction ID', 'Date', 'Previous Savings (PHP)', 'New Savings (PHP)', 'Reason'])
+  members.forEach((member) => (member.adjustments ?? []).forEach((adjustment) => {
+    savingsAdjustmentsSheet.addRow([
+      member.name,
+      adjustment.id,
+      adjustment.date,
+      adjustment.previousAmount,
+      adjustment.newAmount,
+      adjustment.reason,
+    ])
   }))
 
   const accountsSheet = workbook.addWorksheet('Accounts')
@@ -839,6 +887,8 @@ export const writeWorkbookData = async (
       { name: 'Amount (PHP)' },
       { name: 'Details' },
       { name: 'Deleted At' },
+      { name: 'Previous Savings (PHP)' },
+      { name: 'New Savings (PHP)' },
     ],
     rows: deletedSavingsTransactions.map((transaction) => [
       transaction.memberName,
@@ -847,6 +897,8 @@ export const writeWorkbookData = async (
       transaction.amount,
       transaction.details ?? '',
       transaction.deletedAt,
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
     ]),
   })
 
