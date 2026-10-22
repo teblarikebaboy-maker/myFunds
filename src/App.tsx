@@ -126,21 +126,6 @@ const summaryCards = [
   { label: 'Total Profits', value: '₱0.00', delta: 'Interest paid', tone: 'positive' },
 ]
 
-const spendingTrend = [
-  { month: 'Jan', value: 3600 },
-  { month: 'Feb', value: 4800 },
-  { month: 'Mar', value: 4200 },
-  { month: 'Apr', value: 6100 },
-  { month: 'May', value: 5800 },
-  { month: 'Jun', value: 7300 },
-  { month: 'Jul', value: 6700 },
-  { month: 'Aug', value: 7800 },
-  { month: 'Sep', value: 6400 },
-  { month: 'Oct', value: 8200 },
-  { month: 'Nov', value: 7500 },
-  { month: 'Dec', value: 9100 },
-]
-
 const budgetCategories = [
   { name: 'Housing', spent: 1480, limit: 1800, color: 'teal' },
   { name: 'Food', spent: 760, limit: 900, color: 'blue' },
@@ -234,25 +219,48 @@ const formatDate = (date: string) =>
     .format(new Date(`${date}T00:00:00`))
 
 const currentYear = new Date().getFullYear()
+const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+const getMonthlyNetProfit = (
+  borrowers: Borrower[],
+  removedTransactions: RemovedBorrowerTransaction[],
+  year: number,
+) => {
+  const monthlyTotals = Array.from({ length: 12 }, () => 0)
+  const interestPayments = [
+    ...borrowers.flatMap((borrower) => borrower.transactions ?? []),
+    ...removedTransactions.map(({ transaction }) => transaction),
+  ]
+
+  interestPayments.forEach((transaction) => {
+    if (transaction.type !== 'interest-payment' || !transaction.date.startsWith(`${year}-`)) return
+    const month = Number(transaction.date.slice(5, 7)) - 1
+    if (month >= 0 && month < monthlyTotals.length) monthlyTotals[month] += transaction.amount
+  })
+
+  return monthLabels.map((month, index) => ({ month, value: monthlyTotals[index] }))
+}
 
 function OverviewPage({
   totalSavings,
   totalLoanProceeds,
   totalInterestPaid,
+  monthlyNetProfit,
 }: {
   totalSavings: number
   totalLoanProceeds: number
   totalInterestPaid: number
+  monthlyNetProfit: Array<{ month: string; value: number }>
 }) {
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar')
   const [isChartStyleMenuOpen, setIsChartStyleMenuOpen] = useState(false)
   const currentBudget = budgetCategories.reduce((sum, item) => sum + item.spent, 0)
   const totalCapacity = budgetCategories.reduce((sum, item) => sum + item.limit, 0)
   const budgetUsage = Math.round((currentBudget / totalCapacity) * 100)
-  const maxMonthlyProfit = Math.max(...spendingTrend.map((bar) => bar.value))
-  const chartPoints = spendingTrend.map((bar, index) => ({
-    x: 20 + (index / (spendingTrend.length - 1)) * 1060,
-    y: 90 - (bar.value / maxMonthlyProfit) * 76,
+  const maxMonthlyProfit = Math.max(1, ...monthlyNetProfit.map((month) => month.value))
+  const chartPoints = monthlyNetProfit.map((month, index) => ({
+    x: 20 + (index / (monthlyNetProfit.length - 1)) * 1060,
+    y: 90 - (month.value / maxMonthlyProfit) * 76,
   }))
   const chartPath = chartPoints.slice(1).reduce((path, point) => {
     return `${path} L ${point.x} ${point.y}`
@@ -285,29 +293,29 @@ function OverviewPage({
         <article className="panel chart-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">PROFIT</p>
-              <h3>Monthly Profit</h3>
+              <p className="eyebrow">NET PROFIT</p>
+              <h3>Monthly Net Profit</h3>
             </div>
             <button type="button" className="secondary-button">{currentYear}</button>
           </div>
 
-          <div className={`chart chart-${chartStyle}`} aria-label="Monthly profit trend">
+          <div className={`chart chart-${chartStyle}`} aria-label="Monthly net profit trend">
             {chartStyle === 'bar' ? (
-              spendingTrend.map((bar) => (
-                <div key={bar.month} className="bar-group">
+              monthlyNetProfit.map((month) => (
+                <div key={month.month} className="bar-group">
                   <div
                     className="bar-track"
                     role="img"
-                    aria-label={`${bar.month}: ${formatCurrency(bar.value)} profit`}
+                    aria-label={`${month.month}: ${formatCurrency(month.value)} net profit`}
                     tabIndex={0}
                   >
                     <div
                       className="bar-fill"
-                      data-value={formatCurrency(bar.value)}
-                      style={{ height: `${(bar.value / maxMonthlyProfit) * 100}%` }}
+                      data-value={formatCurrency(month.value)}
+                      style={{ height: `${(month.value / maxMonthlyProfit) * 100}%` }}
                     />
                   </div>
-                  <span>{bar.month}</span>
+                  <span>{month.month}</span>
                 </div>
               ))
             ) : (
@@ -316,26 +324,26 @@ function OverviewPage({
                   <svg className="chart-line-svg" viewBox="0 0 1100 100" preserveAspectRatio="none" aria-hidden="true">
                     <path className="chart-line-path" d={chartPath} />
                     {chartPoints.map((point, index) => (
-                      <circle key={spendingTrend[index].month} className="chart-line-dot" cx={point.x} cy={point.y} r="5" />
+                      <circle key={monthlyNetProfit[index].month} className="chart-line-dot" cx={point.x} cy={point.y} r="5" />
                     ))}
                   </svg>
-                  {spendingTrend.map((bar, index) => (
+                  {monthlyNetProfit.map((month, index) => (
                     <div
-                      key={bar.month}
+                      key={month.month}
                       className="chart-point"
                       role="img"
-                      aria-label={`${bar.month}: ${formatCurrency(bar.value)} profit`}
-                      data-value={formatCurrency(bar.value)}
+                      aria-label={`${month.month}: ${formatCurrency(month.value)} net profit`}
+                      data-value={formatCurrency(month.value)}
                       style={{
-                        left: `${(index / (spendingTrend.length - 1)) * 100}%`,
-                        bottom: `${5 + (bar.value / maxMonthlyProfit) * 80}%`,
+                        left: `${(index / (monthlyNetProfit.length - 1)) * 100}%`,
+                        bottom: `${5 + (month.value / maxMonthlyProfit) * 80}%`,
                       }}
                       tabIndex={0}
                     />
                   ))}
                 </div>
                 <div className="chart-months" aria-hidden="true">
-                  {spendingTrend.map((bar) => <span key={bar.month}>{bar.month}</span>)}
+                  {monthlyNetProfit.map((month) => <span key={month.month}>{month.month}</span>)}
                 </div>
               </>
             )}
@@ -1106,10 +1114,10 @@ function LoansPage({
   guarantors: string[]
   isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
-  onAddBorrowerInterest: (borrowerId: string) => void
+  onAddBorrowerInterest: (borrowerId: string, date: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number, date: string) => void
   onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
-  onAddBorrowerPrincipal: (borrowerId: string, amount: number) => void
+  onAddBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
   onRemoveBorrower: (borrowerId: string) => void
   onClearLoans: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
   totalInterestPaid: number
@@ -1124,11 +1132,15 @@ function LoansPage({
   const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
   const [interestPaymentDate, setInterestPaymentDate] = useState(getLocalDate)
   const [interestPaymentError, setInterestPaymentError] = useState('')
+  const [addingInterestBorrowerId, setAddingInterestBorrowerId] = useState<string | null>(null)
+  const [interestAdditionDate, setInterestAdditionDate] = useState(getLocalDate)
+  const [interestAdditionError, setInterestAdditionError] = useState('')
   const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
   const [addingPrincipalBorrowerId, setAddingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
+  const [principalAdditionDate, setPrincipalAdditionDate] = useState(getLocalDate)
   const [principalAdditionError, setPrincipalAdditionError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const [borrowerDirectoryFilter, setBorrowerDirectoryFilter] = useState<BorrowerDirectoryFilter>('all')
@@ -1274,6 +1286,18 @@ function LoansPage({
     setInterestPaymentError('')
   }
 
+  const handleAddBorrowerInterest = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    if (!interestAdditionDate) {
+      setInterestAdditionError('Select the date the interest was added.')
+      return
+    }
+
+    onAddBorrowerInterest(borrower.id, interestAdditionDate)
+    setAddingInterestBorrowerId(null)
+    setInterestAdditionError('')
+  }
+
   const handlePayBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
     event.preventDefault()
     if (hasOutstandingBorrowerBalance(borrower.paydayInterest)) {
@@ -1303,6 +1327,10 @@ function LoansPage({
 
   const handleAddBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
     event.preventDefault()
+    if (!principalAdditionDate) {
+      setPrincipalAdditionError('Select the date the principal was added.')
+      return
+    }
     const amount = Number(principalAdditionAmount)
     if (principalAdditionAmount === '' || !Number.isFinite(amount) || amount <= 0) {
       setPrincipalAdditionError('Enter an amount greater than zero.')
@@ -1314,9 +1342,10 @@ function LoansPage({
       return
     }
 
-    onAddBorrowerPrincipal(borrower.id, roundedAmount)
+    onAddBorrowerPrincipal(borrower.id, roundedAmount, principalAdditionDate)
     setAddingPrincipalBorrowerId(null)
     setPrincipalAdditionAmount('')
+    setPrincipalAdditionDate(getLocalDate())
     setPrincipalAdditionError('')
   }
 
@@ -1521,7 +1550,16 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      onClick={() => onAddBorrowerInterest(borrower.id)}
+                      onClick={() => {
+                        setAddingInterestBorrowerId((currentId) =>
+                          currentId === borrower.id ? null : borrower.id,
+                        )
+                        setInterestAdditionDate(getLocalDate())
+                        setInterestAdditionError('')
+                        setPayingBorrowerId(null)
+                        setPayingPrincipalBorrowerId(null)
+                        setAddingPrincipalBorrowerId(null)
+                      }}
                     >
                       Add interest
                     </button>
@@ -1544,6 +1582,7 @@ function LoansPage({
                       onClick={() => {
                         setAddingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalAdditionAmount('')
+                        setPrincipalAdditionDate(getLocalDate())
                         setPrincipalAdditionError('')
                         setPayingPrincipalBorrowerId(null)
                         setPayingBorrowerId(null)
@@ -1575,6 +1614,38 @@ function LoansPage({
                     </button>
                   </div>
                 </div>
+                {addingInterestBorrowerId === borrower.id && (
+                  <form
+                    className="interest-payment-form"
+                    noValidate
+                    onSubmit={(event) => handleAddBorrowerInterest(event, borrower)}
+                  >
+                    <label>
+                      Interest date
+                      <input
+                        type="date"
+                        required
+                        value={interestAdditionDate}
+                        onChange={(event) => {
+                          setInterestAdditionDate(event.target.value)
+                          setInterestAdditionError('')
+                        }}
+                      />
+                    </label>
+                    <button type="submit" className="primary-button">Add interest</button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setAddingInterestBorrowerId(null)
+                        setInterestAdditionError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {interestAdditionError && <p className="member-error" role="alert">{interestAdditionError}</p>}
+                  </form>
+                )}
                 <div className="borrower-metrics">
                   {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
                   <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
@@ -1671,6 +1742,18 @@ function LoansPage({
                     noValidate
                     onSubmit={(event) => handleAddBorrowerPrincipal(event, borrower)}
                   >
+                    <label>
+                      Date added
+                      <input
+                        type="date"
+                        required
+                        value={principalAdditionDate}
+                        onChange={(event) => {
+                          setPrincipalAdditionDate(event.target.value)
+                          setPrincipalAdditionError('')
+                        }}
+                      />
+                    </label>
                     <label>
                       Amount to add
                       <input
@@ -2405,6 +2488,7 @@ function App() {
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
+  const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, currentYear)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
     (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
@@ -3046,7 +3130,7 @@ function App() {
     ))
   }
 
-  const addBorrowerInterest = (borrowerId: string) => {
+  const addBorrowerInterest = (borrowerId: string, date: string) => {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
@@ -3056,7 +3140,7 @@ function App() {
         id: crypto.randomUUID(),
         type: 'interest' as const,
         amount: accruedInterest,
-        date: getLocalDate(),
+        date,
       }
       return {
         ...borrower,
@@ -3106,7 +3190,7 @@ function App() {
     }))
   }
 
-  const addBorrowerPrincipal = (borrowerId: string, amount: number) => {
+  const addBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
@@ -3116,7 +3200,7 @@ function App() {
         id: crypto.randomUUID(),
         type: 'principal-addition' as const,
         amount,
-        date: getLocalDate(),
+        date,
       }
       return {
         ...borrower,
@@ -3133,6 +3217,7 @@ function App() {
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          monthlyNetProfit={monthlyNetProfit}
         />
       }
       if (activeTab === 'savings') {
@@ -3229,6 +3314,7 @@ function App() {
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          monthlyNetProfit={monthlyNetProfit}
         />
     }
   }
