@@ -1,5 +1,13 @@
 # React + TypeScript + Vite
 
+## Windows Desktop Installer
+
+Install dependencies with `npm install`, then run `npm run build:installer` to create the Windows NSIS installer. The installer and unpacked desktop app are written to `release/`.
+
+The installer creates Start Menu and desktop shortcuts and allows choosing the installation directory.
+
+## Development
+
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 
 Currently, two official plugins are available:

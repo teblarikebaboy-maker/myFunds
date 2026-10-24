@@ -1,11 +1,14 @@
 {
   "name": "funds-organizer",
+  "productName": "Funds Organizer",
+  "main": "electron/main.cjs",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:installer": "npm run build && electron-builder --win nsis",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -20,6 +23,8 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.12",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
@@ -27,5 +32,25 @@
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.0"
+  },
+  "build": {
+    "appId": "com.fundsorganizer.desktop",
+    "productName": "Funds Organizer",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }
