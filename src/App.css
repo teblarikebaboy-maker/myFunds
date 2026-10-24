@@ -2857,6 +2857,18 @@ p {
   font-size: 0.78rem;
 }
 
+.group-operation-cost-edit-form {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+.group-operation-cost-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .group-announcement-list li {
   align-items: flex-start;
 }
@@ -2865,6 +2877,7 @@ p {
   color: #cbd5e1;
   font-size: 0.88rem;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .app-shell[data-theme='light'] .group-update-description,
@@ -3606,11 +3619,17 @@ select:focus-visible {
   font-size: 0.75rem;
 }
 
-.overview-announcement p,
 .overview-announcement-empty {
   color: #cbd5e1;
   font-size: 0.88rem;
   overflow-wrap: anywhere;
+}
+
+.overview-announcement p {
+  color: #cbd5e1;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .overview-announcement-empty {

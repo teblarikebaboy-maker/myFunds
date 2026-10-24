@@ -273,14 +273,6 @@ const savingsPlans = [
   { name: 'Home down payment', value: '₱15,600', target: '₱30,000', rate: 52 },
 ]
 
-const dataBreakdown = [
-  { label: 'Housing', value: '29%' },
-  { label: 'Food', value: '18%' },
-  { label: 'Transport', value: '11%' },
-  { label: 'Investments', value: '24%' },
-  { label: 'Other', value: '18%' },
-]
-
 const tabs: Array<{ id: TabKey; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'savings', label: 'Savings' },
@@ -333,6 +325,25 @@ const getLocalDate = () => {
 const formatDate = (date: string) =>
   new Intl.DateTimeFormat('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
     .format(new Date(`${date}T00:00:00`))
+
+const downloadWorkbook = async (
+  filename: string,
+  buildWorkbook: (workbook: import('exceljs').Workbook) => void,
+) => {
+  const ExcelJS = (await import('exceljs')).default
+  const workbook = new ExcelJS.Workbook()
+  workbook.creator = 'Funds Organizer'
+  buildWorkbook(workbook)
+  const buffer = await workbook.xlsx.writeBuffer()
+  const downloadUrl = URL.createObjectURL(new Blob([buffer as BlobPart], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }))
+  const link = document.createElement('a')
+  link.href = downloadUrl
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(downloadUrl)
+}
 
 const currentYear = new Date().getFullYear()
 const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -650,6 +661,7 @@ type SavingsPageProps = {
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
   onEditMemberSavings: (memberName: string, amount: number, reason: string, date: string) => void
+  onAddMember: (name: string, initialSavings: number, initialSavingsDate: string, email: string, password: string) => Promise<{ success: boolean; message?: string }>
   onDeleteMember: (memberName: string, adminPassword: string) => Promise<{ success: boolean; message?: string }>
   onClearSavingsTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }
@@ -864,10 +876,19 @@ function SavingsPage({
   onAddSavings,
   onPullOutSavings,
   onEditMemberSavings,
+  onAddMember,
   onDeleteMember,
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
+  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
+  const [newMemberName, setNewMemberName] = useState('')
+  const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
+  const [newMemberInitialSavingsDate, setNewMemberInitialSavingsDate] = useState(getLocalDate)
+  const [newMemberEmail, setNewMemberEmail] = useState('')
+  const [newMemberPassword, setNewMemberPassword] = useState('')
+  const [newMemberError, setNewMemberError] = useState('')
+  const [isAddingMember, setIsAddingMember] = useState(false)
   const [deletingMemberName, setDeletingMemberName] = useState<string | null>(null)
   const [editingSavingsMemberName, setEditingSavingsMemberName] = useState<string | null>(null)
   const [editedSavingsAmount, setEditedSavingsAmount] = useState('')
@@ -905,6 +926,51 @@ function SavingsPage({
     }
   }
 
+  const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = newMemberName.trim()
+    const email = newMemberEmail.trim().toLowerCase()
+    const initialSavings = Number(newMemberInitialSavings)
+    const initialSavingsCents = Math.round(initialSavings * 100)
+    if (!name) {
+      setNewMemberError('Enter the member’s full name.')
+      return
+    }
+    if (newMemberInitialSavings === '' || !Number.isFinite(initialSavings) || initialSavings < 0
+      || !Number.isSafeInteger(initialSavingsCents)) {
+      setNewMemberError('Enter an initial savings amount of zero or more.')
+      return
+    }
+    if (!newMemberInitialSavingsDate) {
+      setNewMemberError('Choose the initial savings date.')
+      return
+    }
+    if (!email || !newMemberPassword || newMemberPassword.length < 8) {
+      setNewMemberError('Enter a valid email and a password of at least 8 characters.')
+      return
+    }
+
+    setIsAddingMember(true)
+    setNewMemberError('')
+    try {
+      const result = await onAddMember(name, initialSavingsCents / 100, newMemberInitialSavingsDate, email, newMemberPassword)
+      if (!result.success) {
+        setNewMemberError(result.message ?? 'Could not add this member.')
+        return
+      }
+      setNewMemberName('')
+      setNewMemberInitialSavings('0')
+      setNewMemberInitialSavingsDate(getLocalDate())
+      setNewMemberEmail('')
+      setNewMemberPassword('')
+      setIsAddMemberOpen(false)
+    } catch (error) {
+      setNewMemberError(error instanceof Error ? error.message : 'Could not add this member.')
+    } finally {
+      setIsAddingMember(false)
+    }
+  }
+
   const handleEditMemberSavings = (event: FormEvent<HTMLFormElement>, member: Member) => {
     event.preventDefault()
     const amount = Number(editedSavingsAmount)
@@ -933,8 +999,8 @@ function SavingsPage({
 
   const handleClearSavingsTransactions = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (clearConfirmationText.trim() !== 'deleting records') {
-      setClearSavingsError('Type “deleting records” exactly to continue.')
+    if (clearConfirmationText !== 'delete ALL datas') {
+      setClearSavingsError('Type “delete ALL datas” exactly to continue.')
       return
     }
 
@@ -1041,6 +1107,14 @@ function SavingsPage({
             <h3>Member directory</h3>
           </div>
           <div className="borrower-directory-controls">
+            {isAdmin && (
+              <button type="button" className="primary-button" onClick={() => {
+                setIsAddMemberOpen((open) => !open)
+                setNewMemberError('')
+              }}>
+                {isAddMemberOpen ? 'Cancel' : 'Add members'}
+              </button>
+            )}
             <input
               className="borrower-search"
               type="search"
@@ -1052,6 +1126,49 @@ function SavingsPage({
             <span className="meta-pill">{members.length} total</span>
           </div>
         </div>
+        {isAdmin && isAddMemberOpen && (
+          <form className="add-member-form savings-add-member-form" noValidate onSubmit={(event) => void handleAddMember(event)}>
+            <label>
+              Full name
+              <input autoFocus value={newMemberName} onChange={(event) => {
+                setNewMemberName(event.target.value)
+                setNewMemberError('')
+              }} placeholder="Member name" />
+            </label>
+            <label>
+              Initial savings (PHP)
+              <input type="number" min="0" step="0.01" value={newMemberInitialSavings} onChange={(event) => {
+                setNewMemberInitialSavings(event.target.value)
+                setNewMemberError('')
+              }} />
+            </label>
+            <label>
+              Date
+              <input type="date" required value={newMemberInitialSavingsDate} onChange={(event) => {
+                setNewMemberInitialSavingsDate(event.target.value)
+                setNewMemberError('')
+              }} />
+            </label>
+            <label>
+              Email address
+              <input type="email" autoComplete="email" required value={newMemberEmail} onChange={(event) => {
+                setNewMemberEmail(event.target.value)
+                setNewMemberError('')
+              }} />
+            </label>
+            <label>
+              Password
+              <input type="password" autoComplete="new-password" minLength={8} required value={newMemberPassword} onChange={(event) => {
+                setNewMemberPassword(event.target.value)
+                setNewMemberError('')
+              }} />
+            </label>
+            <button type="submit" className="primary-button" disabled={isAddingMember}>
+              {isAddingMember ? 'Adding member…' : 'Save member'}
+            </button>
+            {newMemberError && <p className="member-error" role="alert">{newMemberError}</p>}
+          </form>
+        )}
         {members.length > 0 ? (
           filteredMembers.length > 0 ? (
             <ul className="savings-directory-list">
@@ -1257,7 +1374,7 @@ function SavingsPage({
                 />
               </label>
               <label>
-                Type deleting records
+                Type delete ALL datas
                 <input
                   type="text"
                   autoComplete="off"
@@ -1293,7 +1410,7 @@ function SavingsPage({
               className="danger-button"
               onClick={() => setIsClearConfirmationOpen(true)}
             >
-              Clear transactions
+              Clear all data
             </button>
           ))}
         </div>
@@ -1468,8 +1585,8 @@ function LoansPage({
 
   const handleClearLoans = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (clearConfirmationText.trim() !== 'deleting records') {
-      setClearLoansError('Type “deleting records” exactly to continue.')
+    if (clearConfirmationText !== 'delete ALL datas') {
+      setClearLoansError('Type “delete ALL datas” exactly to continue.')
       return
     }
 
@@ -1727,7 +1844,7 @@ function LoansPage({
                   />
                 </label>
                 <label>
-                  Type deleting records
+                  Type delete ALL datas
                   <input
                     type="text"
                     autoComplete="off"
@@ -1763,7 +1880,7 @@ function LoansPage({
                 className="danger-button"
                 onClick={() => setIsClearConfirmationOpen(true)}
               >
-                Clear loans
+                Clear all data
               </button>
             ))}
             <select
@@ -2249,6 +2366,8 @@ function ProfitsPage({
   const [clearConfirmationText, setClearConfirmationText] = useState('')
   const [clearProfitError, setClearProfitError] = useState('')
   const [isClearingProfit, setIsClearingProfit] = useState(false)
+  const [groupOperationCosts] = useState(() => loadGroupUpdateData().data.operationCosts)
+  const totalGroupOperationCost = groupOperationCosts.reduce((total, cost) => total + cost.amount, 0)
   const profitTransferred = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
   const profitTransferDates = [...new Set(profitTransfers.map((transfer) => transfer.date))]
     .sort((first, second) => second.localeCompare(first))
@@ -2297,8 +2416,8 @@ function ProfitsPage({
   )
   const handleClearProfitTransactions = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (clearConfirmationText.trim() !== 'deleting records') {
-      setClearProfitError('Type “deleting records” exactly to continue.')
+    if (clearConfirmationText !== 'delete ALL datas') {
+      setClearProfitError('Type “delete ALL datas” exactly to continue.')
       return
     }
 
@@ -2324,7 +2443,7 @@ function ProfitsPage({
     { label: 'Net profit', value: formatCurrency(selectedInterestTotal), tone: 'positive' },
     { label: 'Total receivable', value: formatCurrency(totalReceivableInterest), tone: 'positive' },
     { label: 'Group allowance', value: formatCurrency(totalGroupAllowance), tone: 'positive' },
-    { label: 'Group oprtng cost', value: '₱7,540', tone: 'negative' },
+    { label: 'Group operating cost', value: formatCurrency(totalGroupOperationCost), tone: 'negative' },
   ]
   const totalSavings = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
   const settledTransfersByMember = new Map<string, number>()
@@ -2690,7 +2809,7 @@ function ProfitsPage({
                 />
               </label>
               <label>
-                Type deleting records
+                Type delete ALL datas
                 <input
                   type="text"
                   autoComplete="off"
@@ -2726,7 +2845,7 @@ function ProfitsPage({
               className="danger-button"
               onClick={() => setIsClearConfirmationOpen(true)}
             >
-              Clear transactions
+              Clear all data
             </button>
           ))}
         </div>
@@ -2751,8 +2870,17 @@ function ProfitsPage({
 }
 
 type GroupOperationCost = { id: string; description: string; amount: number; date: string }
+type GroupEncoderPayment = {
+  id: string
+  name: string
+  amount: number
+  dateFrom: string
+  dateTo: string
+  operationCostId: string
+}
 type GroupUpdateData = {
   operationCosts: GroupOperationCost[]
+  groupEncoders: GroupEncoderPayment[]
   meetingSchedule: string
   meetingPlace: string
   meetingPenalty: number
@@ -2764,6 +2892,7 @@ const GROUP_UPDATE_STORAGE_KEY = 'funds-organizer-group-update-v1'
 
 const emptyGroupUpdateData = (): GroupUpdateData => ({
   operationCosts: [],
+  groupEncoders: [],
   meetingSchedule: '',
   meetingPlace: '',
   meetingPenalty: 0,
@@ -2771,7 +2900,9 @@ const emptyGroupUpdateData = (): GroupUpdateData => ({
   announcements: [],
 })
 
-const isGroupUpdateData = (value: unknown): value is GroupUpdateData => {
+const isGroupUpdateData = (
+  value: unknown,
+): value is Omit<GroupUpdateData, 'groupEncoders'> & { groupEncoders?: GroupEncoderPayment[] } => {
   if (!value || typeof value !== 'object') return false
   const data = value as Record<string, unknown>
   return Array.isArray(data.operationCosts)
@@ -2786,6 +2917,16 @@ const isGroupUpdateData = (value: unknown): value is GroupUpdateData => {
     && typeof data.meetingPlace === 'string'
     && typeof data.meetingPenalty === 'number'
     && Number.isFinite(data.meetingPenalty)
+    && (data.groupEncoders === undefined || (Array.isArray(data.groupEncoders)
+      && data.groupEncoders.every((encoder) =>
+        typeof encoder.id === 'string'
+        && typeof encoder.name === 'string'
+        && typeof encoder.amount === 'number'
+        && Number.isFinite(encoder.amount)
+        && typeof encoder.dateFrom === 'string'
+        && typeof encoder.dateTo === 'string'
+        && typeof encoder.operationCostId === 'string',
+      )))
     && Array.isArray(data.boardOfDirectors)
     && data.boardOfDirectors.every((director) => typeof director === 'string')
     && Array.isArray(data.announcements)
@@ -2803,7 +2944,7 @@ const loadGroupUpdateData = () => {
     if (!savedData) return { data: emptyGroupUpdateData(), error: '' }
     const parsed: unknown = JSON.parse(savedData)
     return isGroupUpdateData(parsed)
-      ? { data: parsed, error: '' }
+      ? { data: { ...parsed, groupEncoders: parsed.groupEncoders ?? [] }, error: '' }
       : { data: emptyGroupUpdateData(), error: 'Saved group update data is invalid and could not be loaded.' }
   } catch (error) {
     return {
@@ -2823,12 +2964,26 @@ function GroupUpdatePage() {
   const [costAmount, setCostAmount] = useState('')
   const [costDate, setCostDate] = useState(getLocalDate)
   const [costError, setCostError] = useState('')
+  const [encoderName, setEncoderName] = useState('')
+  const [encoderPaymentAmount, setEncoderPaymentAmount] = useState('')
+  const [encoderDateFrom, setEncoderDateFrom] = useState(getLocalDate)
+  const [encoderDateTo, setEncoderDateTo] = useState(getLocalDate)
+  const [encoderError, setEncoderError] = useState('')
+  const [editingCostId, setEditingCostId] = useState<string | null>(null)
+  const [editCostDescription, setEditCostDescription] = useState('')
+  const [editCostAmount, setEditCostAmount] = useState('')
+  const [editCostDate, setEditCostDate] = useState('')
+  const [editCostError, setEditCostError] = useState('')
   const [meetingError, setMeetingError] = useState('')
   const [directorName, setDirectorName] = useState('')
   const [directorError, setDirectorError] = useState('')
   const [announcementTitle, setAnnouncementTitle] = useState('')
   const [announcementMessage, setAnnouncementMessage] = useState('')
   const [announcementError, setAnnouncementError] = useState('')
+  const [editingAnnouncementId, setEditingAnnouncementId] = useState<string | null>(null)
+  const [editAnnouncementTitle, setEditAnnouncementTitle] = useState('')
+  const [editAnnouncementMessage, setEditAnnouncementMessage] = useState('')
+  const [editAnnouncementError, setEditAnnouncementError] = useState('')
 
   const updateData = (update: (current: GroupUpdateData) => GroupUpdateData) => {
     const nextData = update(data)
@@ -2874,6 +3029,90 @@ function GroupUpdatePage() {
     setCostError('')
   }
 
+  const handleAddGroupEncoder = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const amount = Number(encoderPaymentAmount)
+    if (!encoderName.trim()) {
+      setEncoderError('Enter an encoder name.')
+      return
+    }
+    if (encoderPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
+      setEncoderError('Enter a payment amount greater than zero.')
+      return
+    }
+    if (!encoderDateFrom || !encoderDateTo) {
+      setEncoderError('Choose both dates for the payment period.')
+      return
+    }
+    if (encoderDateFrom > encoderDateTo) {
+      setEncoderError('The start date must be on or before the end date.')
+      return
+    }
+
+    const encoderId = crypto.randomUUID()
+    const operationCostId = crypto.randomUUID()
+    const name = encoderName.trim()
+    updateData((current) => ({
+      ...current,
+      groupEncoders: [...current.groupEncoders, {
+        id: encoderId,
+        name,
+        amount,
+        dateFrom: encoderDateFrom,
+        dateTo: encoderDateTo,
+        operationCostId,
+      }],
+      operationCosts: [{
+        id: operationCostId,
+        description: `Group Encoder payment: ${name} (${encoderDateFrom} to ${encoderDateTo})`,
+        amount,
+        date: encoderDateTo,
+      }, ...current.operationCosts],
+    }))
+    setEncoderName('')
+    setEncoderPaymentAmount('')
+    setEncoderDateFrom(getLocalDate())
+    setEncoderDateTo(getLocalDate())
+    setEncoderError('')
+  }
+
+  const handleRemoveGroupEncoder = (encoder: GroupEncoderPayment) => {
+    updateData((current) => ({
+      ...current,
+      groupEncoders: current.groupEncoders.filter((item) => item.id !== encoder.id),
+      operationCosts: current.operationCosts.filter((cost) => cost.id !== encoder.operationCostId),
+    }))
+  }
+
+  const handleSaveOperationCost = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const amount = Number(editCostAmount)
+    if (!editCostDescription.trim()) {
+      setEditCostError('Enter a description for the operating cost.')
+      return
+    }
+    if (editCostAmount === '' || !Number.isFinite(amount) || amount <= 0) {
+      setEditCostError('Enter an amount greater than zero.')
+      return
+    }
+    if (!editCostDate) {
+      setEditCostError('Choose a date for this operating cost.')
+      return
+    }
+
+    updateData((current) => ({
+      ...current,
+      operationCosts: current.operationCosts.map((cost) => cost.id === editingCostId
+        ? { ...cost, description: editCostDescription.trim(), amount, date: editCostDate }
+        : cost),
+    }))
+    setEditingCostId(null)
+    setEditCostDescription('')
+    setEditCostAmount('')
+    setEditCostDate('')
+    setEditCostError('')
+  }
+
   const handleAddDirector = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = directorName.trim()
@@ -2908,6 +3147,24 @@ function GroupUpdatePage() {
     setAnnouncementTitle('')
     setAnnouncementMessage('')
     setAnnouncementError('')
+  }
+
+  const handleSaveAnnouncement = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!editAnnouncementTitle.trim() || !editAnnouncementMessage.trim()) {
+      setEditAnnouncementError('Enter a title and announcement.')
+      return
+    }
+    updateData((current) => ({
+      ...current,
+      announcements: current.announcements.map((announcement) => announcement.id === editingAnnouncementId
+        ? { ...announcement, title: editAnnouncementTitle.trim(), message: editAnnouncementMessage.trim() }
+        : announcement),
+    }))
+    setEditingAnnouncementId(null)
+    setEditAnnouncementTitle('')
+    setEditAnnouncementMessage('')
+    setEditAnnouncementError('')
   }
 
   const totalOperationCosts = data.operationCosts.reduce((total, cost) => total + cost.amount, 0)
@@ -2957,16 +3214,99 @@ function GroupUpdatePage() {
             <ul className="group-update-list">
               {data.operationCosts.map((cost) => (
                 <li key={cost.id}>
-                  <div><strong>{cost.description}</strong><small>{formatDate(cost.date)}</small></div>
-                  <span>{formatBorrowerCurrency(cost.amount)}</span>
-                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove operation cost ${cost.description}`} onClick={() => updateData((current) => ({
-                    ...current,
-                    operationCosts: current.operationCosts.filter((item) => item.id !== cost.id),
-                  }))}>Remove</button>
+                  {editingCostId === cost.id ? (
+                    <form className="group-update-form group-operation-cost-edit-form" noValidate onSubmit={handleSaveOperationCost}>
+                      <label>
+                        Description
+                        <input value={editCostDescription} onChange={(event) => setEditCostDescription(event.target.value)} />
+                      </label>
+                      <div className="group-update-inline-fields">
+                        <label>
+                          Amount (PHP)
+                          <input type="number" min="0" step="0.01" value={editCostAmount} onChange={(event) => setEditCostAmount(event.target.value)} />
+                        </label>
+                        <label>
+                          Date
+                          <input type="date" value={editCostDate} onChange={(event) => setEditCostDate(event.target.value)} />
+                        </label>
+                      </div>
+                      <div className="group-operation-cost-actions">
+                        <button type="submit" className="primary-button">Save</button>
+                        <button type="button" className="secondary-button" onClick={() => {
+                          setEditingCostId(null)
+                          setEditCostError('')
+                        }}>Cancel</button>
+                      </div>
+                      {editCostError && <p className="member-error" role="alert">{editCostError}</p>}
+                    </form>
+                  ) : (
+                    <>
+                      <div><strong>{cost.description}</strong><small>{formatDate(cost.date)}</small></div>
+                      <span>{formatBorrowerCurrency(cost.amount)}</span>
+                      <div className="group-operation-cost-actions">
+                        <button type="button" className="secondary-button group-update-remove" onClick={() => {
+                          setEditingCostId(cost.id)
+                          setEditCostDescription(cost.description)
+                          setEditCostAmount(String(cost.amount))
+                          setEditCostDate(cost.date)
+                          setEditCostError('')
+                        }}>Edit</button>
+                        <button type="button" className="secondary-button group-update-remove" aria-label={`Remove operation cost ${cost.description}`} onClick={() => updateData((current) => ({
+                          ...current,
+                          operationCosts: current.operationCosts.filter((item) => item.id !== cost.id),
+                        }))}>Remove</button>
+                      </div>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
           ) : <p className="group-update-empty">No operation costs recorded.</p>}
+        </article>
+
+        <article className="panel group-update-card">
+          <div className="group-update-card-header">
+            <div>
+              <p className="eyebrow">Group payments</p>
+              <h3>Group Encoder</h3>
+            </div>
+          </div>
+          <form className="group-update-form" noValidate onSubmit={handleAddGroupEncoder}>
+            <label>
+              Encoder name
+              <input value={encoderName} onChange={(event) => setEncoderName(event.target.value)} placeholder="Enter a name" />
+            </label>
+            <label>
+              Payment amount (PHP)
+              <input type="number" min="0" step="0.01" value={encoderPaymentAmount} onChange={(event) => setEncoderPaymentAmount(event.target.value)} placeholder="0.00" />
+            </label>
+            <div className="group-update-inline-fields">
+              <label>
+                From
+                <input type="date" value={encoderDateFrom} onChange={(event) => setEncoderDateFrom(event.target.value)} />
+              </label>
+              <label>
+                To
+                <input type="date" value={encoderDateTo} onChange={(event) => setEncoderDateTo(event.target.value)} />
+              </label>
+            </div>
+            <button type="submit" className="primary-button">Add encoder payment</button>
+            {encoderError && <p className="member-error" role="alert">{encoderError}</p>}
+          </form>
+          {data.groupEncoders.length > 0 ? (
+            <ul className="group-update-list">
+              {data.groupEncoders.map((encoder) => (
+                <li key={encoder.id}>
+                  <div>
+                    <strong>{encoder.name}</strong>
+                    <small>{formatDate(encoder.dateFrom)} to {formatDate(encoder.dateTo)}</small>
+                  </div>
+                  <span>{formatBorrowerCurrency(encoder.amount)}</span>
+                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove encoder payment for ${encoder.name}`} onClick={() => handleRemoveGroupEncoder(encoder)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="group-update-empty">No encoder payments recorded.</p>}
         </article>
 
         <article className="panel group-update-card">
@@ -3077,15 +3417,46 @@ function GroupUpdatePage() {
             <ul className="group-update-list group-announcement-list">
               {data.announcements.map((announcement) => (
                 <li key={announcement.id}>
-                  <div>
-                    <strong>{announcement.title}</strong>
-                    <small>{formatDate(announcement.date)}</small>
-                    <p>{announcement.message}</p>
-                  </div>
-                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove announcement ${announcement.title}`} onClick={() => updateData((current) => ({
-                    ...current,
-                    announcements: current.announcements.filter((item) => item.id !== announcement.id),
-                  }))}>Remove</button>
+                  {editingAnnouncementId === announcement.id ? (
+                    <form className="group-update-form group-announcement-edit-form" noValidate onSubmit={handleSaveAnnouncement}>
+                      <label>
+                        Title
+                        <input value={editAnnouncementTitle} onChange={(event) => setEditAnnouncementTitle(event.target.value)} />
+                      </label>
+                      <label>
+                        Announcement
+                        <textarea value={editAnnouncementMessage} onChange={(event) => setEditAnnouncementMessage(event.target.value)} rows={3} />
+                      </label>
+                      <div className="group-announcement-actions">
+                        <button type="submit" className="primary-button">Save</button>
+                        <button type="button" className="secondary-button" onClick={() => {
+                          setEditingAnnouncementId(null)
+                          setEditAnnouncementError('')
+                        }}>Cancel</button>
+                      </div>
+                      {editAnnouncementError && <p className="member-error" role="alert">{editAnnouncementError}</p>}
+                    </form>
+                  ) : (
+                    <>
+                      <div>
+                        <strong>{announcement.title}</strong>
+                        <small>{formatDate(announcement.date)}</small>
+                        <p>{announcement.message}</p>
+                      </div>
+                      <div className="group-announcement-actions">
+                        <button type="button" className="secondary-button group-update-remove" onClick={() => {
+                          setEditingAnnouncementId(announcement.id)
+                          setEditAnnouncementTitle(announcement.title)
+                          setEditAnnouncementMessage(announcement.message)
+                          setEditAnnouncementError('')
+                        }}>Edit</button>
+                        <button type="button" className="secondary-button group-update-remove" aria-label={`Remove announcement ${announcement.title}`} onClick={() => updateData((current) => ({
+                          ...current,
+                          announcements: current.announcements.filter((item) => item.id !== announcement.id),
+                        }))}>Remove</button>
+                      </div>
+                    </>
+                  )}
                 </li>
               ))}
             </ul>
@@ -3097,72 +3468,187 @@ function GroupUpdatePage() {
 }
 
 type DataPageProps = {
-  databaseMessage: string
-  isDatabaseConnecting: boolean
-  canChooseDatabaseFolder: boolean
-  onChooseDatabaseFolder: () => void
+  borrowers: Borrower[]
+  onExportOverview: (adminPassword: string) => Promise<void>
+  onExportSavings: (adminPassword: string) => Promise<void>
+  onExportLoans: (adminPassword: string) => Promise<void>
+  onExportProfits: (adminPassword: string) => Promise<void>
 }
 
 function DataPage({
-  databaseMessage,
-  isDatabaseConnecting,
-  canChooseDatabaseFolder,
-  onChooseDatabaseFolder,
+  borrowers,
+  onExportOverview,
+  onExportSavings,
+  onExportLoans,
+  onExportProfits,
 }: DataPageProps) {
+  const activeLoans = borrowers.filter((borrower) =>
+    hasOutstandingBorrowerBalance(borrower.loanAmount)
+    || hasOutstandingBorrowerBalance(borrower.paydayInterest),
+  )
+  const inactiveLoans = borrowers.filter((borrower) =>
+    !hasOutstandingBorrowerBalance(borrower.loanAmount)
+    && !hasOutstandingBorrowerBalance(borrower.paydayInterest),
+  )
+  const [exportingData, setExportingData] = useState('')
+  const [exportError, setExportError] = useState('')
+  const [adminPassword, setAdminPassword] = useState('')
+  const [selectedExport, setSelectedExport] = useState<{
+    label: string
+    exportData: (password: string) => Promise<void>
+  } | null>(null)
+  const handleExport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selectedExport || !adminPassword) {
+      setExportError('Enter the admin password to export data.')
+      return
+    }
+    setExportingData(selectedExport.label)
+    setExportError('')
+    try {
+      await selectedExport.exportData(adminPassword)
+      setAdminPassword('')
+      setSelectedExport(null)
+    } catch (error) {
+      setExportError(error instanceof Error
+        ? error.message
+        : `Could not export ${selectedExport.label.toLowerCase()} data.`)
+    } finally {
+      setAdminPassword('')
+      setExportingData('')
+    }
+  }
+
   return (
-    <main className="page-view">
-      <section className="page-header">
-        <div>
-          <p className="eyebrow">Data</p>
-          <h2>Financial insights</h2>
-          <p className="database-status" role="status">{databaseMessage}</p>
-        </div>
-        <button
-          type="button"
-          className="primary-button"
-          disabled={isDatabaseConnecting || !canChooseDatabaseFolder}
-          onClick={onChooseDatabaseFolder}
-        >
-          {isDatabaseConnecting ? 'Connecting…' : 'Choose or change database folder'}
-        </button>
-      </section>
-
-      <section className="card-grid">
-        {dataBreakdown.map((entry) => (
-          <article key={entry.label} className="panel stat-panel">
-            <div className="mini-header">
-              <span>{entry.label}</span>
-              <strong>{entry.value}</strong>
-            </div>
-            <div className="progress-bar">
-              <span className="progress-fill blue" style={{ width: entry.value }} />
-            </div>
-          </article>
-        ))}
-      </section>
-
+    <main className="page-view data-export-page">
       <section className="panel full-width-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Sync</p>
-            <h3>Connected sources</h3>
+            <p className="eyebrow">Export</p>
+            <h2>Download data</h2>
           </div>
         </div>
         <div className="stats-grid">
-          <div className="stat-box">
-            <span>Bank accounts</span>
-            <strong>4 linked</strong>
-          </div>
-          <div className="stat-box">
-            <span>Cards</span>
-            <strong>3 active</strong>
-          </div>
-          <div className="stat-box">
-            <span>Data freshness</span>
-            <strong>Updated 4 min ago</strong>
+          <button type="button" className="secondary-button" disabled={Boolean(exportingData)} onClick={() => {
+            setSelectedExport({ label: 'Overview', exportData: onExportOverview })
+            setAdminPassword('')
+            setExportError('')
+          }}>
+            {exportingData === 'Overview' ? 'Exporting…' : 'Export overview data'}
+          </button>
+          <button type="button" className="secondary-button" disabled={Boolean(exportingData)} onClick={() => {
+            setSelectedExport({ label: 'Savings', exportData: onExportSavings })
+            setAdminPassword('')
+            setExportError('')
+          }}>
+            {exportingData === 'Savings' ? 'Exporting…' : 'Export savings data'}
+          </button>
+          <button type="button" className="secondary-button" disabled={Boolean(exportingData)} onClick={() => {
+            setSelectedExport({ label: 'Loans', exportData: onExportLoans })
+            setAdminPassword('')
+            setExportError('')
+          }}>
+            {exportingData === 'Loans' ? 'Exporting…' : 'Export loans data'}
+          </button>
+          <button type="button" className="secondary-button" disabled={Boolean(exportingData)} onClick={() => {
+            setSelectedExport({ label: 'Profits', exportData: onExportProfits })
+            setAdminPassword('')
+            setExportError('')
+          }}>
+            {exportingData === 'Profits' ? 'Exporting…' : 'Export profit data'}
+          </button>
+        </div>
+        {exportError && <p className="member-error" role="alert">{exportError}</p>}
+      </section>
+      <section className="panel full-width-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Loans</p>
+            <h2>Loan status</h2>
           </div>
         </div>
+        <div className="borrower-groups data-loan-groups">
+          {[
+            { title: 'Active loans', items: activeLoans },
+            { title: 'Inactive loans', items: inactiveLoans },
+          ].map(({ title, items }) => (
+            <section key={title} className="borrower-group" aria-label={title}>
+              <div className="borrower-group-heading">
+                <h4>{title}</h4>
+                <span>{items.length}</span>
+              </div>
+              {items.length > 0 ? (
+                <ul className="borrower-list">
+                  {items.map((borrower) => (
+                    <li key={borrower.id} className="borrower-item">
+                      <div className="borrower-item-header">
+                        <div className="borrower-name-principal">
+                          <strong>{borrower.name}</strong>
+                          {borrower.guarantorName && <span>Guarantor: {borrower.guarantorName}</span>}
+                        </div>
+                      </div>
+                      <div className="borrower-metrics">
+                        <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
+                        <span className="borrower-metric interest-metric"><strong>Interest due:</strong> {formatBorrowerCurrency(borrower.paydayInterest)}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="savings-history-empty">No {title.toLowerCase()}.</p>
+              )}
+            </section>
+          ))}
+        </div>
       </section>
+      {selectedExport && (
+        <div className="login-overlay" onClick={(event) => {
+          if (event.target === event.currentTarget && !exportingData) {
+            setSelectedExport(null)
+            setAdminPassword('')
+            setExportError('')
+          }
+        }}>
+          <section className="login-dialog" role="dialog" aria-modal="true" aria-labelledby="export-password-title">
+            <div className="login-dialog-header">
+              <div>
+                <p className="eyebrow">Protected export</p>
+                <h2 id="export-password-title">Export {selectedExport.label} data</h2>
+              </div>
+              <button type="button" className="login-close-button" aria-label="Cancel export" disabled={Boolean(exportingData)} onClick={() => {
+                setSelectedExport(null)
+                setAdminPassword('')
+                setExportError('')
+              }}>×</button>
+            </div>
+            <form className="login-form" noValidate onSubmit={(event) => void handleExport(event)}>
+              <label>
+                Admin password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  required
+                  value={adminPassword}
+                  onChange={(event) => {
+                    setAdminPassword(event.target.value)
+                    setExportError('')
+                  }}
+                />
+              </label>
+              <button type="submit" className="primary-button" disabled={Boolean(exportingData)}>
+                {exportingData ? 'Verifying…' : `Export ${selectedExport.label.toLowerCase()} data`}
+              </button>
+              <button type="button" className="secondary-button" disabled={Boolean(exportingData)} onClick={() => {
+                setSelectedExport(null)
+                setAdminPassword('')
+                setExportError('')
+              }}>Cancel</button>
+              {exportError && <p className="member-error" role="alert">{exportError}</p>}
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   )
 }
@@ -3551,6 +4037,76 @@ function App() {
     )
   }
 
+  const addMemberAccount = async (
+    name: string,
+    initialSavings: number,
+    initialSavingsDate: string,
+    email: string,
+    password: string,
+  ) => {
+    if (signedInRole !== 'admin') {
+      return { success: false, message: 'Only an admin can add a member account.' }
+    }
+    const normalizedEmail = email.trim().toLowerCase()
+    const normalizedName = name.trim()
+    if (!normalizedName || !normalizedEmail || password.length < 8
+      || !Number.isFinite(initialSavings) || initialSavings < 0 || !initialSavingsDate) {
+      return { success: false, message: 'Enter valid member details and a password of at least 8 characters.' }
+    }
+    if (accounts.some((account) => account.email.trim().toLowerCase() === normalizedEmail)) {
+      return { success: false, message: 'An account with that email already exists.' }
+    }
+    if (members.some((member) => member.name.trim().toLowerCase() === normalizedName.toLowerCase())) {
+      return { success: false, message: 'A member with that name already exists.' }
+    }
+    const directory = databaseDirectory.current
+    if (!directory) {
+      return { success: false, message: 'Connect the Excel database folder before adding a member.' }
+    }
+
+    const permission = await directory.queryPermission({ mode: 'readwrite' })
+    if (permission !== 'granted') {
+      return { success: false, message: 'Reconnect the Excel database folder before adding a member.' }
+    }
+
+    const { salt, passwordHash } = await createPasswordHash(password)
+    const account: DatabaseAccount = {
+      email: normalizedEmail,
+      name: normalizedName,
+      role: 'member',
+      salt,
+      passwordHash,
+      createdAt: new Date().toISOString(),
+    }
+    const member: Member = {
+      name: normalizedName,
+      accountEmail: normalizedEmail,
+      initialSavings,
+      initialSavingsDate,
+      contributions: [],
+      withdrawals: [],
+      adjustments: [],
+    }
+    const updatedMembers = [...members, member]
+    const updatedAccounts = [...accounts, account]
+    await writeWorkbookData(
+      directory,
+      updatedMembers,
+      updatedAccounts,
+      borrowers,
+      removedBorrowerTransactions,
+      profitTransfers,
+      profitCashouts,
+      deletedSavingsTransactions,
+      deletedProfitTransactions,
+      deletedLoans,
+    )
+    setMembers(updatedMembers)
+    setAccounts(updatedAccounts)
+    setDatabaseMessage(`Excel database connected: ${directory.name}`)
+    return { success: true }
+  }
+
   const editMemberSavings = (memberName: string, amount: number, reason: string, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
       || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim() || !date) return
@@ -3734,8 +4290,8 @@ function App() {
     if (signedInRole !== 'admin') {
       return { success: false, message: 'Only an admin can clear savings transactions.' }
     }
-    if (confirmationText.trim() !== 'deleting records') {
-      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    if (confirmationText !== 'delete ALL datas') {
+      return { success: false, message: 'Type “delete ALL datas” exactly to continue.' }
     }
     const adminAccount = accounts.find((account) =>
       account.role === 'admin'
@@ -3803,8 +4359,8 @@ function App() {
     if (signedInRole !== 'admin') {
       return { success: false, message: 'Only an admin can clear loan records.' }
     }
-    if (confirmationText.trim() !== 'deleting records') {
-      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    if (confirmationText !== 'delete ALL datas') {
+      return { success: false, message: 'Type “delete ALL datas” exactly to continue.' }
     }
     const adminAccount = accounts.find((account) =>
       account.role === 'admin'
@@ -3864,8 +4420,8 @@ function App() {
     if (signedInRole !== 'admin') {
       return { success: false, message: 'Only an admin can clear profit transactions.' }
     }
-    if (confirmationText.trim() !== 'deleting records') {
-      return { success: false, message: 'Type “deleting records” exactly to continue.' }
+    if (confirmationText !== 'delete ALL datas') {
+      return { success: false, message: 'Type “delete ALL datas” exactly to continue.' }
     }
     const adminAccount = accounts.find((account) =>
       account.role === 'admin'
@@ -3883,6 +4439,7 @@ function App() {
       ...currentTransactions,
       ...profitCashouts.map((transaction) => ({ ...transaction, deletedAt })),
     ])
+    setProfitTransfers([])
     setProfitCashouts([])
     return { success: true }
   }
@@ -4017,6 +4574,203 @@ function App() {
     }))
   }
 
+  const verifyAdminExportPassword = async (password: string) => {
+    if (signedInRole !== 'admin') throw new Error('Only an admin can export data.')
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) throw new Error('The logged-in admin account could not be verified.')
+    if (!(await verifyPassword(password, adminAccount))) throw new Error('The admin password is incorrect.')
+  }
+
+  const exportOverviewData = () => downloadWorkbook('overview-data.xlsx', (workbook) => {
+    const groupUpdateData = loadGroupUpdateData().data
+    const summarySheet = workbook.addWorksheet('Summary')
+    summarySheet.addRow(['Metric', 'Amount (PHP)'])
+    summarySheet.addRows([
+      ['Total savings', totalSavings],
+      ['Total loan proceeds', totalLoanProceeds],
+      ['Total interest paid', totalInterestPaid],
+      ['Total receivable interest', totalReceivableInterest],
+      ['Group allowance', totalGroupAllowance],
+      ['Group operating cost', groupUpdateData.operationCosts.reduce((total, cost) => total + cost.amount, 0)],
+    ])
+
+    const monthlySheet = workbook.addWorksheet('Monthly Net Profit')
+    monthlySheet.addRow(['Year', currentYear])
+    monthlySheet.addRow(['Month', 'Amount (PHP)'])
+    monthlyNetProfit.forEach(({ month, value }) => monthlySheet.addRow([month, value]))
+
+    const cashInSheet = workbook.addWorksheet('Cash In')
+    cashInSheet.addRow(['Name', 'Type', 'Amount (PHP)', 'Date', 'Reason', 'Previous Amount (PHP)', 'New Amount (PHP)'])
+    cashInTransactions.forEach((transaction) => cashInSheet.addRow([
+      transaction.name,
+      transaction.type,
+      transaction.amount,
+      transaction.date,
+      transaction.reason ?? '',
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
+    ]))
+
+    const cashOutSheet = workbook.addWorksheet('Cash Out')
+    cashOutSheet.addRow(['Name', 'Type', 'Amount (PHP)', 'Date', 'Reason', 'Previous Amount (PHP)', 'New Amount (PHP)'])
+    cashOutTransactions.forEach((transaction) => cashOutSheet.addRow([
+      transaction.name,
+      transaction.type,
+      transaction.amount,
+      transaction.date,
+      transaction.reason ?? '',
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
+    ]))
+  })
+
+  const exportSavingsData = () => downloadWorkbook('savings-data.xlsx', (workbook) => {
+    const memberSheet = workbook.addWorksheet('Members')
+    memberSheet.addRow(['Member', 'Email', 'Initial Savings (PHP)', 'Initial Savings Date', 'Current Savings (PHP)'])
+    members.forEach((member) => memberSheet.addRow([
+      member.name,
+      member.accountEmail ?? '',
+      member.initialSavings,
+      member.initialSavingsDate,
+      getMemberSavings(member),
+    ]))
+
+    const contributionsSheet = workbook.addWorksheet('Contributions')
+    contributionsSheet.addRow(['Member', 'Date', 'Amount (PHP)', 'Source'])
+    members.forEach((member) => member.contributions.forEach((contribution) => {
+      contributionsSheet.addRow([member.name, contribution.date, contribution.amount, contribution.source ?? ''])
+    }))
+
+    const withdrawalsSheet = workbook.addWorksheet('Withdrawals')
+    withdrawalsSheet.addRow(['Member', 'Date', 'Amount (PHP)', 'Reason'])
+    members.forEach((member) => member.withdrawals.forEach((withdrawal) => {
+      withdrawalsSheet.addRow([member.name, withdrawal.date, withdrawal.amount, withdrawal.reason])
+    }))
+
+    const adjustmentsSheet = workbook.addWorksheet('Adjustments')
+    adjustmentsSheet.addRow(['Member', 'ID', 'Date', 'Previous Savings (PHP)', 'New Savings (PHP)', 'Reason'])
+    members.forEach((member) => (member.adjustments ?? []).forEach((adjustment) => {
+      adjustmentsSheet.addRow([
+        member.name,
+        adjustment.id,
+        adjustment.date,
+        adjustment.previousAmount,
+        adjustment.newAmount,
+        adjustment.reason,
+      ])
+    }))
+
+    const deletedSheet = workbook.addWorksheet('Deleted Savings')
+    deletedSheet.addRow(['Member', 'Type', 'Date', 'Amount (PHP)', 'Details', 'Deleted At'])
+    deletedSavingsTransactions.forEach((transaction) => deletedSheet.addRow([
+      transaction.memberName,
+      transaction.type,
+      transaction.date,
+      transaction.amount,
+      transaction.details ?? '',
+      transaction.deletedAt,
+    ]))
+  })
+
+  const exportLoansData = () => downloadWorkbook('loans-data.xlsx', (workbook) => {
+    const borrowerSheet = workbook.addWorksheet('Borrowers')
+    borrowerSheet.addRow(['Borrower ID', 'Name', 'Email', 'Guarantor', 'Created At', 'Principal (PHP)', 'Interest Rate (%)', 'Interest Due (PHP)'])
+    borrowers.forEach((borrower) => borrowerSheet.addRow([
+      borrower.id,
+      borrower.name,
+      borrower.email ?? '',
+      borrower.guarantorName ?? '',
+      borrower.createdAt,
+      borrower.loanAmount,
+      borrower.interestRate,
+      borrower.paydayInterest,
+    ]))
+
+    const transactionSheet = workbook.addWorksheet('Loan Transactions')
+    transactionSheet.addRow(['Borrower ID', 'Borrower', 'Status', 'Transaction ID', 'Type', 'Amount (PHP)', 'Date', 'Previous Principal (PHP)', 'New Principal (PHP)', 'Reason'])
+    borrowers.forEach((borrower) => (borrower.transactions ?? []).forEach((transaction) => {
+      transactionSheet.addRow([
+        borrower.id,
+        borrower.name,
+        'Current',
+        transaction.id,
+        transaction.type,
+        transaction.amount,
+        transaction.date,
+        transaction.previousAmount ?? '',
+        transaction.newAmount ?? '',
+        transaction.reason ?? '',
+      ])
+    }))
+    removedBorrowerTransactions.forEach(({ borrowerId, borrowerName, transaction }) => {
+      transactionSheet.addRow([
+        borrowerId,
+        borrowerName,
+        'Removed borrower',
+        transaction.id,
+        transaction.type,
+        transaction.amount,
+        transaction.date,
+        transaction.previousAmount ?? '',
+        transaction.newAmount ?? '',
+        transaction.reason ?? '',
+      ])
+    })
+
+    const deletedSheet = workbook.addWorksheet('Deleted Loans')
+    deletedSheet.addRow(['Borrower ID', 'Borrower', 'Email', 'Guarantor', 'Principal (PHP)', 'Interest Rate (%)', 'Interest Due (PHP)', 'Created At', 'Transaction Type', 'Transaction Amount (PHP)', 'Transaction Date', 'Deleted At'])
+    deletedLoans.forEach((loan) => deletedSheet.addRow([
+      loan.borrowerId,
+      loan.borrowerName,
+      loan.email ?? '',
+      loan.guarantorName ?? '',
+      loan.loanAmount,
+      loan.interestRate,
+      loan.paydayInterest,
+      loan.createdAt,
+      loan.transaction?.type ?? '',
+      loan.transaction?.amount ?? '',
+      loan.transaction?.date ?? '',
+      loan.deletedAt,
+    ]))
+  })
+
+  const exportProfitData = () => downloadWorkbook('profit-data.xlsx', (workbook) => {
+    const transfersSheet = workbook.addWorksheet('Profit Transfers')
+    transfersSheet.addRow(['Amount (PHP)', 'Transfer Date', 'Period From', 'Period To', 'Payment Allocations'])
+    profitTransfers.forEach((transfer) => transfersSheet.addRow([
+      transfer.amount,
+      transfer.date,
+      transfer.periodFrom ?? '',
+      transfer.periodTo ?? '',
+      JSON.stringify(transfer.paymentAllocations ?? []),
+    ]))
+
+    const payoutsSheet = workbook.addWorksheet('Profit Payouts')
+    payoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)'])
+    profitCashouts.forEach((cashout) => payoutsSheet.addRow([
+      cashout.memberName,
+      cashout.amount,
+      cashout.date,
+      cashout.action ?? 'cashout',
+      cashout.transferTotal ?? '',
+    ]))
+
+    const deletedSheet = workbook.addWorksheet('Deleted Profit')
+    deletedSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Deleted At'])
+    deletedProfitTransactions.forEach((transaction) => deletedSheet.addRow([
+      transaction.memberName,
+      transaction.amount,
+      transaction.date,
+      transaction.action ?? 'cashout',
+      transaction.transferTotal ?? '',
+      transaction.deletedAt,
+    ]))
+  })
+
   const renderPage = () => {
     if (signedInRole !== 'admin') {
       if (activeTab === 'overview') {
@@ -4042,6 +4796,7 @@ function App() {
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}
+            onAddMember={addMemberAccount}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />
@@ -4064,6 +4819,7 @@ function App() {
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}
+            onAddMember={addMemberAccount}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />
@@ -4103,10 +4859,23 @@ function App() {
       case 'data':
         return (
           <DataPage
-            databaseMessage={databaseMessage}
-            isDatabaseConnecting={isDatabaseConnecting}
-            canChooseDatabaseFolder={canChooseDatabaseFolder}
-            onChooseDatabaseFolder={handleChooseDatabaseFolder}
+            borrowers={borrowers}
+            onExportOverview={async (password) => {
+              await verifyAdminExportPassword(password)
+              await exportOverviewData()
+            }}
+            onExportSavings={async (password) => {
+              await verifyAdminExportPassword(password)
+              await exportSavingsData()
+            }}
+            onExportLoans={async (password) => {
+              await verifyAdminExportPassword(password)
+              await exportLoansData()
+            }}
+            onExportProfits={async (password) => {
+              await verifyAdminExportPassword(password)
+              await exportProfitData()
+            }}
           />
         )
       case 'group-update':
