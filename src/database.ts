@@ -2,12 +2,21 @@ import type ExcelJS from 'exceljs'
 
 export type SavingsContribution = { amount: number; date: string; source?: 'member profit' }
 export type SavingsWithdrawal = { amount: number; date: string; reason: string }
+export type SavingsAdjustment = {
+  id: string
+  previousAmount: number
+  newAmount: number
+  date: string
+  reason: string
+}
 export type DeletedSavingsTransaction = {
   memberName: string
-  type: 'initial savings' | 'contribution' | 'withdrawal'
+  type: 'initial savings' | 'contribution' | 'withdrawal' | 'adjustment'
   amount: number
   date: string
   details?: string
+  previousAmount?: number
+  newAmount?: number
   deletedAt: string
 }
 export type Member = {
@@ -17,6 +26,7 @@ export type Member = {
   initialSavingsDate: string
   contributions: SavingsContribution[]
   withdrawals: SavingsWithdrawal[]
+  adjustments?: SavingsAdjustment[]
 }
 export type AccountRole = 'admin' | 'member'
 export type DatabaseAccount = {
@@ -29,9 +39,12 @@ export type DatabaseAccount = {
 }
 export type LoanTransaction = {
   id: string
-  type: 'loan' | 'interest' | 'interest-payment' | 'principal-payment' | 'principal-addition'
+  type: 'loan' | 'interest' | 'interest-payment' | 'principal-payment' | 'principal-addition' | 'principal-adjustment'
   amount: number
   date: string
+  previousAmount?: number
+  newAmount?: number
+  reason?: string
 }
 export type RemovedBorrowerTransaction = {
   borrowerId: string
@@ -251,6 +264,18 @@ const getCellNumber = (value: ExcelJS.CellValue, context: string): number => {
   return amount
 }
 
+const getPrincipalAdjustmentDetails = (row: ExcelJS.Row, headers: Map<string, number>) => {
+  const emptyColumn = row.cellCount + 1
+  const previousAmount = Number(row.getCell(headers.get('Previous Principal (PHP)') ?? emptyColumn).value)
+  const newAmount = Number(row.getCell(headers.get('New Principal (PHP)') ?? emptyColumn).value)
+  const reason = String(row.getCell(headers.get('Reason') ?? emptyColumn).value ?? '').trim()
+  return Number.isFinite(previousAmount) && previousAmount >= 0
+    && Number.isFinite(newAmount) && newAmount >= 0
+    && reason
+    ? { previousAmount, newAmount, reason }
+    : undefined
+}
+
 const parseLoanTransactions = (value: string): LoanTransaction[] => {
   if (!value) return []
   try {
@@ -262,7 +287,11 @@ const parseLoanTransactions = (value: string): LoanTransaction[] => {
         || transaction.type === 'interest'
         || transaction.type === 'interest-payment'
         || transaction.type === 'principal-payment'
-        || transaction.type === 'principal-addition')
+        || transaction.type === 'principal-addition'
+        || (transaction.type === 'principal-adjustment'
+          && Number.isFinite(Number(transaction.previousAmount))
+          && Number.isFinite(Number(transaction.newAmount))
+          && typeof transaction.reason === 'string'))
       && Number.isFinite(Number(transaction.amount))
       && typeof transaction.date === 'string')
       .map((transaction) => ({
@@ -270,6 +299,11 @@ const parseLoanTransactions = (value: string): LoanTransaction[] => {
         type: transaction.type,
         amount: Number(transaction.amount),
         date: transaction.date,
+        ...(transaction.type === 'principal-adjustment' ? {
+          previousAmount: Number(transaction.previousAmount),
+          newAmount: Number(transaction.newAmount),
+          reason: transaction.reason,
+        } : {}),
       }))
   } catch {
     return []
@@ -337,6 +371,7 @@ export const readWorkbookData = async (
       initialSavingsDate: getCellDate(row.getCell(3).value),
       contributions: [],
       withdrawals: [],
+      adjustments: [],
       accountEmail: String(row.getCell(4).value ?? '').trim().toLowerCase() || undefined,
     })
   })
@@ -369,6 +404,25 @@ export const readWorkbookData = async (
       amount: getCellNumber(row.getCell(3).value, `${name}, withdrawal`),
       reason: String(row.getCell(4).value ?? ''),
     })
+  })
+
+  workbook.getWorksheet('Savings Adjustments')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const name = String(row.getCell(1).value ?? '').trim()
+    if (!name) return
+    const member = members.get(name)
+    if (!member) throw new Error(`Excel savings adjustment refers to unknown member "${name}".`)
+    const id = String(row.getCell(2).value ?? '').trim()
+    const date = getCellDate(row.getCell(3).value)
+    const previousAmount = Number(row.getCell(4).value)
+    const newAmount = Number(row.getCell(5).value)
+    const reason = String(row.getCell(6).value ?? '').trim()
+    if (!id || !date || !Number.isFinite(previousAmount) || previousAmount < 0
+      || !Number.isFinite(newAmount) || newAmount < 0 || !reason) {
+      throw new Error(`Excel savings adjustment for "${name}" has invalid details.`)
+    }
+    member.adjustments ??= []
+    member.adjustments.push({ id, date, previousAmount, newAmount, reason })
   })
 
   const accounts: DatabaseAccount[] = []
@@ -437,35 +491,59 @@ export const readWorkbookData = async (
   })
 
   const borrowersById = new Map(borrowers.map((borrower) => [borrower.id, borrower]))
-  workbook.getWorksheet('Borrower Transactions')?.eachRow((row, rowNumber) => {
+  const borrowerTransactionsSheet = workbook.getWorksheet('Borrower Transactions')
+  const borrowerTransactionHeaders = new Map<string, number>()
+  borrowerTransactionsSheet?.getRow(1).eachCell((cell, columnNumber) => {
+    borrowerTransactionHeaders.set(String(cell.value ?? '').trim(), columnNumber)
+  })
+  borrowerTransactionsSheet?.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return
-    const borrower = borrowersById.get(String(row.getCell(1).value ?? '').trim())
-    const id = String(row.getCell(3).value ?? '').trim()
-    const type = String(row.getCell(4).value ?? '').trim()
-    const amount = Number(row.getCell(5).value)
-    const date = getCellDate(row.getCell(6).value)
-    if (!borrower || !id || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition'].includes(type)
-      || !Number.isFinite(amount) || !date) return
+    const getCell = (header: string, fallbackColumn: number) =>
+      row.getCell(borrowerTransactionHeaders.get(header) ?? fallbackColumn).value
+    const borrower = borrowersById.get(String(getCell('Borrower ID', 1) ?? '').trim())
+    const id = String(getCell('Transaction ID', 3) ?? '').trim()
+    const type = String(getCell('Type', 4) ?? '').trim()
+    const amount = Number(getCell('Amount (PHP)', 5))
+    const date = getCellDate(getCell('Date', 6))
+    const adjustmentDetails = type === 'principal-adjustment'
+      ? getPrincipalAdjustmentDetails(row, borrowerTransactionHeaders)
+      : undefined
+    if (!borrower || !id
+      || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition', 'principal-adjustment'].includes(type)
+      || !Number.isFinite(amount) || !date
+      || (type === 'principal-adjustment' && !adjustmentDetails)) return
     borrower.transactions.push({
       id,
       type: type as LoanTransaction['type'],
       amount,
       date,
+      ...adjustmentDetails,
     })
   })
 
   const removedBorrowerTransactions: RemovedBorrowerTransaction[] = []
-  workbook.getWorksheet('Removed Borrower Transactions')?.eachRow((row, rowNumber) => {
+  const removedBorrowerTransactionsSheet = workbook.getWorksheet('Removed Borrower Transactions')
+  const removedTransactionHeaders = new Map<string, number>()
+  removedBorrowerTransactionsSheet?.getRow(1).eachCell((cell, columnNumber) => {
+    removedTransactionHeaders.set(String(cell.value ?? '').trim(), columnNumber)
+  })
+  removedBorrowerTransactionsSheet?.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return
-    const borrowerId = String(row.getCell(1).value ?? '').trim()
-    const borrowerName = String(row.getCell(2).value ?? '').trim()
-    const id = String(row.getCell(3).value ?? '').trim()
-    const type = String(row.getCell(4).value ?? '').trim()
-    const amount = Number(row.getCell(5).value)
-    const date = getCellDate(row.getCell(6).value)
+    const getCell = (header: string, fallbackColumn: number) =>
+      row.getCell(removedTransactionHeaders.get(header) ?? fallbackColumn).value
+    const borrowerId = String(getCell('Borrower ID', 1) ?? '').trim()
+    const borrowerName = String(getCell('Borrower', 2) ?? '').trim()
+    const id = String(getCell('Transaction ID', 3) ?? '').trim()
+    const type = String(getCell('Type', 4) ?? '').trim()
+    const amount = Number(getCell('Amount (PHP)', 5))
+    const date = getCellDate(getCell('Date', 6))
+    const adjustmentDetails = type === 'principal-adjustment'
+      ? getPrincipalAdjustmentDetails(row, removedTransactionHeaders)
+      : undefined
     if (!borrowerId || !borrowerName || !id
-      || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition'].includes(type)
-      || !Number.isFinite(amount) || !date) return
+      || !['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition', 'principal-adjustment'].includes(type)
+      || !Number.isFinite(amount) || !date
+      || (type === 'principal-adjustment' && !adjustmentDetails)) return
     removedBorrowerTransactions.push({
       borrowerId,
       borrowerName,
@@ -474,6 +552,7 @@ export const readWorkbookData = async (
         type: type as LoanTransaction['type'],
         amount,
         date,
+        ...adjustmentDetails,
       },
     })
   })
@@ -541,14 +620,19 @@ export const readWorkbookData = async (
     const amount = Number(row.getCell(4).value)
     const details = String(row.getCell(5).value ?? '').trim() || undefined
     const deletedAt = getCellDate(row.getCell(6).value)
-    if (memberName && ['initial savings', 'contribution', 'withdrawal'].includes(type)
-      && Number.isFinite(amount) && date && deletedAt) {
+    const previousAmount = Number(row.getCell(7).value)
+    const newAmount = Number(row.getCell(8).value)
+    if (memberName && ['initial savings', 'contribution', 'withdrawal', 'adjustment'].includes(type)
+      && Number.isFinite(amount) && date && deletedAt
+      && (type !== 'adjustment'
+        || (Number.isFinite(previousAmount) && Number.isFinite(newAmount) && Boolean(details)))) {
       deletedSavingsTransactions.push({
         memberName,
         type: type as DeletedSavingsTransaction['type'],
         amount,
         date,
         details,
+        ...(type === 'adjustment' ? { previousAmount, newAmount } : {}),
         deletedAt,
       })
     }
@@ -586,11 +670,19 @@ export const readWorkbookData = async (
     const transactionAmount = Number(row.getCell(11).value)
     const transactionDate = getCellDate(row.getCell(12).value)
     const deletedAt = getCellDate(row.getCell(13).value)
-    const validTransactionTypes: LoanTransaction['type'][] = ['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition']
+    const adjustmentDetails = String(row.getCell(10).value ?? '').trim() === 'principal-adjustment'
+      ? getPrincipalAdjustmentDetails(row, new Map([
+        ['Previous Principal (PHP)', 14],
+        ['New Principal (PHP)', 15],
+        ['Reason', 16],
+      ]))
+      : undefined
+    const validTransactionTypes: LoanTransaction['type'][] = ['loan', 'interest', 'interest-payment', 'principal-payment', 'principal-addition', 'principal-adjustment']
     if (!borrowerId || !borrowerName || !deletedAt) return
     const transaction = transactionId && validTransactionTypes.includes(transactionType as LoanTransaction['type'])
       && Number.isFinite(transactionAmount) && transactionDate
-      ? { id: transactionId, type: transactionType as LoanTransaction['type'], amount: transactionAmount, date: transactionDate }
+      && (transactionType !== 'principal-adjustment' || adjustmentDetails)
+      ? { id: transactionId, type: transactionType as LoanTransaction['type'], amount: transactionAmount, date: transactionDate, ...adjustmentDetails }
       : undefined
     deletedLoans.push({
       borrowerId,
@@ -644,6 +736,19 @@ export const writeWorkbookData = async (
   withdrawalsSheet.addRow(['Member', 'Date', 'Amount', 'Reason'])
   members.forEach((member) => member.withdrawals.forEach((withdrawal) => {
     withdrawalsSheet.addRow([member.name, withdrawal.date, withdrawal.amount, withdrawal.reason])
+  }))
+
+  const savingsAdjustmentsSheet = workbook.addWorksheet('Savings Adjustments')
+  savingsAdjustmentsSheet.addRow(['Member', 'Transaction ID', 'Date', 'Previous Savings (PHP)', 'New Savings (PHP)', 'Reason'])
+  members.forEach((member) => (member.adjustments ?? []).forEach((adjustment) => {
+    savingsAdjustmentsSheet.addRow([
+      member.name,
+      adjustment.id,
+      adjustment.date,
+      adjustment.previousAmount,
+      adjustment.newAmount,
+      adjustment.reason,
+    ])
   }))
 
   const accountsSheet = workbook.addWorksheet('Accounts')
@@ -700,6 +805,9 @@ export const writeWorkbookData = async (
       { name: 'Type' },
       { name: 'Amount (PHP)' },
       { name: 'Date' },
+      { name: 'Previous Principal (PHP)' },
+      { name: 'New Principal (PHP)' },
+      { name: 'Reason' },
     ],
     rows: borrowers.flatMap((borrower) => (borrower.transactions ?? []).map((transaction) => [
       borrower.id,
@@ -708,6 +816,9 @@ export const writeWorkbookData = async (
       transaction.type,
       transaction.amount,
       transaction.date,
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
+      transaction.reason ?? '',
     ])),
   })
 
@@ -725,6 +836,9 @@ export const writeWorkbookData = async (
       { name: 'Type' },
       { name: 'Amount (PHP)' },
       { name: 'Date' },
+      { name: 'Previous Principal (PHP)' },
+      { name: 'New Principal (PHP)' },
+      { name: 'Reason' },
     ],
     rows: removedBorrowerTransactions.map(({ borrowerId, borrowerName, transaction }) => [
       borrowerId,
@@ -733,6 +847,9 @@ export const writeWorkbookData = async (
       transaction.type,
       transaction.amount,
       transaction.date,
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
+      transaction.reason ?? '',
     ]),
   })
 
@@ -770,6 +887,8 @@ export const writeWorkbookData = async (
       { name: 'Amount (PHP)' },
       { name: 'Details' },
       { name: 'Deleted At' },
+      { name: 'Previous Savings (PHP)' },
+      { name: 'New Savings (PHP)' },
     ],
     rows: deletedSavingsTransactions.map((transaction) => [
       transaction.memberName,
@@ -778,6 +897,8 @@ export const writeWorkbookData = async (
       transaction.amount,
       transaction.details ?? '',
       transaction.deletedAt,
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
     ]),
   })
 
@@ -827,6 +948,9 @@ export const writeWorkbookData = async (
       { name: 'Transaction Amount (PHP)' },
       { name: 'Transaction Date' },
       { name: 'Deleted At' },
+      { name: 'Previous Principal (PHP)' },
+      { name: 'New Principal (PHP)' },
+      { name: 'Reason' },
     ],
     rows: deletedLoans.map((loan) => [
       loan.borrowerId,
@@ -842,6 +966,9 @@ export const writeWorkbookData = async (
       loan.transaction?.amount ?? '',
       loan.transaction?.date ?? '',
       loan.deletedAt,
+      loan.transaction?.previousAmount ?? '',
+      loan.transaction?.newAmount ?? '',
+      loan.transaction?.reason ?? '',
     ]),
   })
 

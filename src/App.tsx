@@ -36,6 +36,7 @@ import './App.css'
 type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data' | 'group-update'
 type BorrowerDirectoryFilter = 'all' | 'active' | 'paid'
 type ChartStyle = 'bar' | 'line'
+type GroupAnnouncement = { id: string; title: string; message: string; date: string }
 type SavingsTransaction = {
   id: string
   member: string
@@ -44,12 +45,29 @@ type SavingsTransaction = {
   date: string
   reason?: string
   fee?: number
+  previousAmount?: number
+  newAmount?: number
 }
+
+const getSavingsAdjustmentTotal = (member: Member) =>
+  (member.adjustments ?? []).reduce(
+    (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
+    0,
+  )
 
 const getMemberSavings = (member: Member) =>
   member.initialSavings
   + member.contributions.reduce((total, contribution) => total + contribution.amount, 0)
   - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
+  + getSavingsAdjustmentTotal(member)
+
+const getMemberProfitShareSavings = (member: Member) =>
+  Math.max(0, member.initialSavings
+    + member.contributions
+      .filter((contribution) => contribution.source !== 'member profit')
+      .reduce((total, contribution) => total + contribution.amount, 0)
+    - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
+    + getSavingsAdjustmentTotal(member))
 
 const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
   {
@@ -74,6 +92,16 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
     date: withdrawal.date,
     reason: withdrawal.reason,
     fee: withdrawal.amount * 0.1,
+  })),
+  ...(member.adjustments ?? []).map((adjustment) => ({
+    id: adjustment.id,
+    member: member.name,
+    type: 'Savings adjustment',
+    amount: adjustment.newAmount - adjustment.previousAmount,
+    date: adjustment.date,
+    reason: adjustment.reason,
+    previousAmount: adjustment.previousAmount,
+    newAmount: adjustment.newAmount,
   })),
 ].sort((first, second) => second.date.localeCompare(first.date))
 
@@ -110,6 +138,7 @@ const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[
       initialSavingsDate: getLocalDate(),
       contributions: [],
       withdrawals: [],
+      adjustments: [],
     })
   })
 
@@ -126,45 +155,117 @@ const summaryCards = [
   { label: 'Total Profits', value: '₱0.00', delta: 'Interest paid', tone: 'positive' },
 ]
 
-const spendingTrend = [
-  { month: 'Jan', value: 3600 },
-  { month: 'Feb', value: 4800 },
-  { month: 'Mar', value: 4200 },
-  { month: 'Apr', value: 6100 },
-  { month: 'May', value: 5800 },
-  { month: 'Jun', value: 7300 },
-  { month: 'Jul', value: 6700 },
-  { month: 'Aug', value: 7800 },
-  { month: 'Sep', value: 6400 },
-  { month: 'Oct', value: 8200 },
-  { month: 'Nov', value: 7500 },
-  { month: 'Dec', value: 9100 },
-]
+type OverviewCashOutTransaction = {
+  id: string
+  name: string
+  type: string
+  amount: number
+  date: string
+  reason?: string
+  previousAmount?: number
+  newAmount?: number
+}
 
-const budgetCategories = [
-  { name: 'Housing', spent: 1480, limit: 1800, color: 'teal' },
-  { name: 'Food', spent: 760, limit: 900, color: 'blue' },
-  { name: 'Transport', spent: 420, limit: 600, color: 'orange' },
-  { name: 'Entertainment', spent: 390, limit: 500, color: 'pink' },
-]
+const getOverviewCashOutTransactions = (
+  members: Member[],
+  borrowers: Borrower[],
+  profitCashouts: ProfitCashout[],
+): OverviewCashOutTransaction[] => [
+  ...profitCashouts
+    .filter((cashout) => cashout.action === 'cashout' || cashout.action === undefined)
+    .map((cashout, index) => ({
+      id: `profit-${cashout.memberName}-${cashout.date}-${index}`,
+      name: cashout.memberName,
+      type: 'Get profit',
+      amount: cashout.amount,
+      date: cashout.date,
+    })),
+  ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
+    .filter((transaction) => transaction.type === 'loan' || transaction.type === 'principal-addition')
+    .map((transaction) => ({
+      id: `${borrower.id}-${transaction.id}`,
+      name: borrower.name,
+      type: transaction.type === 'loan' ? 'Loan amount' : 'Add principal',
+      amount: transaction.amount,
+      date: transaction.date,
+    }))),
+  ...members.flatMap((member) => member.withdrawals.map((withdrawal, index) => ({
+    id: `withdrawal-${member.name}-${withdrawal.date}-${index}`,
+    name: member.name,
+    type: 'Pull-out',
+    amount: withdrawal.amount,
+    date: withdrawal.date,
+  }))),
+  ...members.flatMap((member) => (member.adjustments ?? [])
+    .filter((adjustment) => adjustment.newAmount < adjustment.previousAmount)
+    .map((adjustment) => ({
+      id: `adjustment-${member.name}-${adjustment.id}`,
+      name: member.name,
+      type: 'Savings adjustment',
+      amount: adjustment.previousAmount - adjustment.newAmount,
+      date: adjustment.date,
+      reason: adjustment.reason,
+      previousAmount: adjustment.previousAmount,
+      newAmount: adjustment.newAmount,
+    }))),
+].sort((first, second) => second.date.localeCompare(first.date))
 
-const transactions = [
-  { merchant: 'Northwind Payroll', type: 'Income', amount: '+₱2,950', date: 'Today', tone: 'positive' },
-  { merchant: 'Fresh Market', type: 'Groceries', amount: '-₱148', date: 'Yesterday', tone: 'negative' },
-  { merchant: 'City Transport', type: 'Transit', amount: '-₱64', date: 'Mon', tone: 'negative' },
-  { merchant: 'Apex Studio', type: 'Subscription', amount: '-₱29', date: 'Sun', tone: 'negative' },
-]
+type OverviewCashInTransaction = {
+  id: string
+  name: string
+  type: string
+  amount: number
+  date: string
+  reason?: string
+  previousAmount?: number
+  newAmount?: number
+}
 
-const upcomingBills = [
-  { name: 'Rent', due: 'Due in 3 days', amount: '₱1,520' },
-  { name: 'Utilities', due: 'Due in 6 days', amount: '₱210' },
-  { name: 'Insurance', due: 'Due in 11 days', amount: '₱180' },
-]
-
-const goals = [
-  { name: 'Emergency fund', value: '₱8,200', target: '₱10,000', progress: 82 },
-  { name: 'Vacation', value: '₱2,640', target: '₱5,000', progress: 53 },
-]
+const getOverviewCashInTransactions = (
+  members: Member[],
+  borrowers: Borrower[],
+  removedTransactions: RemovedBorrowerTransaction[],
+): OverviewCashInTransaction[] => [
+  ...members.flatMap((member) => member.contributions.map((contribution, index) => ({
+    id: `savings-${member.name}-${contribution.date}-${index}`,
+    name: member.name,
+    type: contribution.source === 'member profit' ? 'Profit added to savings' : 'Add savings',
+    amount: contribution.amount,
+    date: contribution.date,
+  }))),
+  ...members.flatMap((member) => (member.adjustments ?? [])
+    .filter((adjustment) => adjustment.newAmount > adjustment.previousAmount)
+    .map((adjustment) => ({
+      id: `adjustment-${member.name}-${adjustment.id}`,
+      name: member.name,
+      type: 'Savings adjustment',
+      amount: adjustment.newAmount - adjustment.previousAmount,
+      date: adjustment.date,
+      reason: adjustment.reason,
+      previousAmount: adjustment.previousAmount,
+      newAmount: adjustment.newAmount,
+    }))),
+  ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
+    .filter((transaction) => transaction.type === 'interest-payment' || transaction.type === 'principal-payment')
+    .map((transaction) => ({
+      id: `${borrower.id}-${transaction.id}`,
+      name: borrower.name,
+      type: transaction.type === 'interest-payment' ? 'Pay interest' : 'Pay principal',
+      amount: transaction.amount,
+      date: transaction.date,
+    }))),
+  ...removedTransactions
+    .filter(({ transaction }) =>
+      transaction.type === 'interest-payment' || transaction.type === 'principal-payment',
+    )
+    .map(({ borrowerId, borrowerName, transaction }) => ({
+      id: `${borrowerId}-${transaction.id}`,
+      name: borrowerName,
+      type: transaction.type === 'interest-payment' ? 'Pay interest' : 'Pay principal',
+      amount: transaction.amount,
+      date: transaction.date,
+    })),
+].sort((first, second) => second.date.localeCompare(first.date))
 
 const homeDownPaymentTarget = 30000
 
@@ -234,25 +335,57 @@ const formatDate = (date: string) =>
     .format(new Date(`${date}T00:00:00`))
 
 const currentYear = new Date().getFullYear()
+const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+const getMonthlyNetProfit = (
+  borrowers: Borrower[],
+  removedTransactions: RemovedBorrowerTransaction[],
+  year: number,
+) => {
+  const monthlyTotals = Array.from({ length: 12 }, () => 0)
+  const interestPayments = [
+    ...borrowers.flatMap((borrower) => borrower.transactions ?? []),
+    ...removedTransactions.map(({ transaction }) => transaction),
+  ]
+
+  interestPayments.forEach((transaction) => {
+    if (transaction.type !== 'interest-payment' || !transaction.date.startsWith(`${year}-`)) return
+    const month = Number(transaction.date.slice(5, 7)) - 1
+    if (month >= 0 && month < monthlyTotals.length) monthlyTotals[month] += transaction.amount
+  })
+
+  return monthLabels.map((month, index) => ({ month, value: monthlyTotals[index] }))
+}
 
 function OverviewPage({
   totalSavings,
   totalLoanProceeds,
   totalInterestPaid,
+  monthlyNetProfit,
+  cashInTransactions,
+  cashOutTransactions,
 }: {
   totalSavings: number
   totalLoanProceeds: number
   totalInterestPaid: number
+  monthlyNetProfit: Array<{ month: string; value: number }>
+  cashInTransactions: OverviewCashInTransaction[]
+  cashOutTransactions: OverviewCashOutTransaction[]
 }) {
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar')
   const [isChartStyleMenuOpen, setIsChartStyleMenuOpen] = useState(false)
-  const currentBudget = budgetCategories.reduce((sum, item) => sum + item.spent, 0)
-  const totalCapacity = budgetCategories.reduce((sum, item) => sum + item.limit, 0)
-  const budgetUsage = Math.round((currentBudget / totalCapacity) * 100)
-  const maxMonthlyProfit = Math.max(...spendingTrend.map((bar) => bar.value))
-  const chartPoints = spendingTrend.map((bar, index) => ({
-    x: 20 + (index / (spendingTrend.length - 1)) * 1060,
-    y: 90 - (bar.value / maxMonthlyProfit) * 76,
+  const [{ data: groupUpdateData, error: groupUpdateError }] = useState(loadGroupUpdateData)
+  const meetingDate = groupUpdateData.meetingSchedule ? new Date(groupUpdateData.meetingSchedule) : null
+  const meetingSchedule = meetingDate && !Number.isNaN(meetingDate.getTime())
+    ? new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short' }).format(meetingDate)
+    : ''
+  const meetingMapUrl = groupUpdateData.meetingPlace.trim()
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(groupUpdateData.meetingPlace.trim())}`
+    : ''
+  const maxMonthlyProfit = Math.max(1, ...monthlyNetProfit.map((month) => month.value))
+  const chartPoints = monthlyNetProfit.map((month, index) => ({
+    x: 20 + (index / (monthlyNetProfit.length - 1)) * 1060,
+    y: 90 - (month.value / maxMonthlyProfit) * 76,
   }))
   const chartPath = chartPoints.slice(1).reduce((path, point) => {
     return `${path} L ${point.x} ${point.y}`
@@ -263,7 +396,7 @@ function OverviewPage({
     <main className="dashboard">
       <section className="summary-grid" aria-label="Summary cards">
         {summaryCards.map((card) => (
-          <article key={card.label} className="summary-card">
+          <article key={card.label} className={`summary-card overview-summary-card ${card.tone}`}>
             <p>{card.label}</p>
             <h2>
               {card.label === 'Available funds'
@@ -282,32 +415,32 @@ function OverviewPage({
       </section>
 
       <section className="content-grid">
-        <article className="panel chart-panel">
+        <article className="panel chart-panel overview-chart-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">PROFIT</p>
-              <h3>Monthly Profit</h3>
+              <p className="eyebrow">NET PROFIT</p>
+              <h3>Monthly Net Profit</h3>
             </div>
             <button type="button" className="secondary-button">{currentYear}</button>
           </div>
 
-          <div className={`chart chart-${chartStyle}`} aria-label="Monthly profit trend">
+          <div className={`chart chart-${chartStyle}`} aria-label="Monthly net profit trend">
             {chartStyle === 'bar' ? (
-              spendingTrend.map((bar) => (
-                <div key={bar.month} className="bar-group">
+              monthlyNetProfit.map((month) => (
+                <div key={month.month} className="bar-group">
                   <div
                     className="bar-track"
                     role="img"
-                    aria-label={`${bar.month}: ${formatCurrency(bar.value)} profit`}
+                    aria-label={`${month.month}: ${formatCurrency(month.value)} net profit`}
                     tabIndex={0}
                   >
                     <div
                       className="bar-fill"
-                      data-value={formatCurrency(bar.value)}
-                      style={{ height: `${(bar.value / maxMonthlyProfit) * 100}%` }}
+                      data-value={formatCurrency(month.value)}
+                      style={{ height: `${(month.value / maxMonthlyProfit) * 100}%` }}
                     />
                   </div>
-                  <span>{bar.month}</span>
+                  <span>{month.month}</span>
                 </div>
               ))
             ) : (
@@ -316,26 +449,26 @@ function OverviewPage({
                   <svg className="chart-line-svg" viewBox="0 0 1100 100" preserveAspectRatio="none" aria-hidden="true">
                     <path className="chart-line-path" d={chartPath} />
                     {chartPoints.map((point, index) => (
-                      <circle key={spendingTrend[index].month} className="chart-line-dot" cx={point.x} cy={point.y} r="5" />
+                      <circle key={monthlyNetProfit[index].month} className="chart-line-dot" cx={point.x} cy={point.y} r="5" />
                     ))}
                   </svg>
-                  {spendingTrend.map((bar, index) => (
+                  {monthlyNetProfit.map((month, index) => (
                     <div
-                      key={bar.month}
+                      key={month.month}
                       className="chart-point"
                       role="img"
-                      aria-label={`${bar.month}: ${formatCurrency(bar.value)} profit`}
-                      data-value={formatCurrency(bar.value)}
+                      aria-label={`${month.month}: ${formatCurrency(month.value)} net profit`}
+                      data-value={formatCurrency(month.value)}
                       style={{
-                        left: `${(index / (spendingTrend.length - 1)) * 100}%`,
-                        bottom: `${5 + (bar.value / maxMonthlyProfit) * 80}%`,
+                        left: `${(index / (monthlyNetProfit.length - 1)) * 100}%`,
+                        bottom: `${5 + (month.value / maxMonthlyProfit) * 80}%`,
                       }}
                       tabIndex={0}
                     />
                   ))}
                 </div>
                 <div className="chart-months" aria-hidden="true">
-                  {spendingTrend.map((bar) => <span key={bar.month}>{bar.month}</span>)}
+                  {monthlyNetProfit.map((month) => <span key={month.month}>{month.month}</span>)}
                 </div>
               </>
             )}
@@ -379,129 +512,127 @@ function OverviewPage({
           </div>
         </article>
 
-        <article className="panel snapshot-panel">
+        <article className="panel snapshot-panel overview-snapshot-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Announcements</p>
-              <h3>New Update</h3>
+              <p className="eyebrow">Group Update</p>
+              <h3>Announcements</h3>
             </div>
           </div>
 
-          <div className="account-card accent">
-            <div className="account-meta">
-              <span>Budget note</span>
-              <strong>New</strong>
-            </div>
-            <div className="account-balance">
-              <small>Focus</small>
-              <strong>{formatCurrency(18240)}</strong>
-            </div>
-          </div>
+          {groupUpdateData.announcements.length > 0 ? (
+            <ul className="overview-announcement-list">
+              {groupUpdateData.announcements.map((announcement) => (
+                <li key={announcement.id} className="overview-announcement">
+                  <div className="account-meta">
+                    <strong>{announcement.title}</strong>
+                    <time dateTime={announcement.date}>{formatDate(announcement.date)}</time>
+                  </div>
+                  <p>{announcement.message}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="overview-announcement-empty">
+              {groupUpdateError || 'No group announcements yet.'}
+            </p>
+          )}
 
-          <div className="account-card muted">
-            <div className="account-meta">
-              <span>ALERT!</span>
-              <strong>On track</strong>
+          <section className="overview-meeting" aria-label="Meeting details">
+            <div className="overview-meeting-header">
+              <p className="eyebrow">Group Update</p>
+              <h4>Meeting schedule and details</h4>
             </div>
-            <div className="account-balance">
-              <small>Saved this month</small>
-              <strong>{formatCurrency(14680)}</strong>
-            </div>
-          </div>
+            {groupUpdateError ? (
+              <p className="overview-meeting-empty">{groupUpdateError}</p>
+            ) : groupUpdateData.meetingSchedule || groupUpdateData.meetingPlace || groupUpdateData.meetingPenalty > 0 ? (
+              <dl className="overview-meeting-details">
+                <div>
+                  <dt>Schedule</dt>
+                  <dd>{meetingSchedule || 'Schedule unavailable'}</dd>
+                </div>
+                <div>
+                  <dt>Place</dt>
+                  <dd>
+                    {groupUpdateData.meetingPlace || 'Not set'}
+                    {meetingMapUrl && (
+                      <a href={meetingMapUrl} target="_blank" rel="noreferrer">Open map</a>
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Penalty for not attending</dt>
+                  <dd>{formatCurrency(groupUpdateData.meetingPenalty)}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="overview-meeting-empty">No meeting details set.</p>
+            )}
+          </section>
         </article>
       </section>
 
       <section className="detail-grid">
-        <article className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Recent</p>
-              <h3>Transactions</h3>
-            </div>
-            <span className="meta-pill">{budgetUsage}% used</span>
-          </div>
-
-          <div className="budget-list">
-            {budgetCategories.map((category) => {
-              const ratio = Math.min((category.spent / category.limit) * 100, 100)
-              return (
-                <div key={category.name} className="budget-item">
-                  <div className="budget-header">
-                    <span>{category.name}</span>
-                    <strong>
-                      {formatCurrency(category.spent)} / {formatCurrency(category.limit)}
-                    </strong>
-                  </div>
-                  <div className="progress-bar" aria-label={`${category.name} budget use`}>
-                    <span className={`progress-fill ${category.color}`} style={{ width: `${ratio}%` }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </article>
-
-        <article className="panel">
+        <article className="panel overview-cash-in-panel">
           <div className="panel-header">
             <div>
               <p className="eyebrow">CASH-IN</p>
               <h3>Transactions</h3>
             </div>
-            <span className="meta-pill">Last 7 days</span>
+            <span className="meta-pill">All transactions</span>
           </div>
 
-          <ul className="transaction-list">
-            {transactions.map((item) => (
-              <li key={`${item.merchant}-${item.date}`} className="transaction-item">
-                <div>
-                  <strong>{item.merchant}</strong>
-                  <small>
-                    {item.type} · {item.date}
-                  </small>
-                </div>
-                <span className={item.tone}>{item.amount}</span>
-              </li>
-            ))}
-          </ul>
+          {cashInTransactions.length > 0 ? (
+            <ul className="transaction-list overview-transaction-list">
+              {cashInTransactions.map((transaction) => (
+                <li key={transaction.id} className="transaction-item">
+                  <div>
+                    <strong>{transaction.name} · {transaction.type}</strong>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                    </small>
+                  </div>
+                  <span className="positive">+{formatBorrowerCurrency(transaction.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No cash-in transactions yet.</p>
+          )}
         </article>
 
-        <article className="panel side-panel">
+        <article className="panel side-panel overview-cash-out-panel">
           <div className="panel-header">
             <div>
               <p className="eyebrow">CASH-OUT</p>
-              <h3>Upcoming</h3>
+              <h3>Transactions</h3>
             </div>
           </div>
 
-          <ul className="bill-list">
-            {upcomingBills.map((bill) => (
-              <li key={bill.name} className="bill-item">
-                <div>
-                  <strong>{bill.name}</strong>
-                  <small>{bill.due}</small>
-                </div>
-                <span>{bill.amount}</span>
-              </li>
-            ))}
-          </ul>
+          {cashOutTransactions.length > 0 ? (
+            <ul className="bill-list overview-transaction-list">
+              {cashOutTransactions.map((transaction) => (
+                <li key={transaction.id} className="bill-item">
+                  <div>
+                    <strong>{transaction.name} · {transaction.type}</strong>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                    </small>
+                  </div>
+                  <span className="negative">-{formatBorrowerCurrency(transaction.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No cash-out transactions yet.</p>
+          )}
 
-          <div className="divider" />
-
-          <div className="goal-section">
-            <h4>Goals</h4>
-            {goals.map((goal) => (
-              <div key={goal.name} className="goal-item">
-                <div className="goal-header">
-                  <span>{goal.name}</span>
-                  <strong>{goal.value}</strong>
-                </div>
-                <div className="progress-bar tiny" aria-label={`${goal.name} progress`}>
-                  <span className="progress-fill blue" style={{ width: `${goal.progress}%` }} />
-                </div>
-                <small>{goal.target} target</small>
-              </div>
-            ))}
-          </div>
         </article>
       </section>
     </main>
@@ -518,8 +649,208 @@ type SavingsPageProps = {
   onMemberChange: (member: string) => void
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
+  onEditMemberSavings: (memberName: string, amount: number, reason: string, date: string) => void
   onDeleteMember: (memberName: string, adminPassword: string) => Promise<{ success: boolean; message?: string }>
   onClearSavingsTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
+}
+
+function AddMemberSavingsForm({
+  memberName,
+  onAddSavings,
+}: {
+  memberName: string
+  onAddSavings: (memberName: string, amount: number, date: string) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState(getLocalDate)
+  const [error, setError] = useState('')
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const parsedAmount = Number(amount)
+
+    if (amount === '' || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setError('Enter a savings amount greater than zero.')
+      return
+    }
+
+    if (!date) {
+      setError('Choose a date for this savings entry.')
+      return
+    }
+
+    onAddSavings(memberName, parsedAmount, date)
+    setAmount('')
+    setDate(getLocalDate())
+    setError('')
+    setIsOpen(false)
+  }
+
+  return (
+    <div className="savings-member-actions">
+      {!isOpen ? (
+        <button type="button" className="primary-button" onClick={() => setIsOpen(true)}>
+          Add savings
+        </button>
+      ) : (
+        <form className="add-savings-form" noValidate onSubmit={handleSubmit}>
+          <label>
+            Amount (PHP)
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value)
+                setError('')
+              }}
+              placeholder="0"
+            />
+          </label>
+          <label>
+            Date
+            <input
+              type="date"
+              required
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value)
+                setError('')
+              }}
+            />
+          </label>
+          <button type="submit" className="primary-button">
+            Save savings
+          </button>
+          <button type="button" className="secondary-button" onClick={() => {
+            setIsOpen(false)
+            setError('')
+          }}>
+            Cancel
+          </button>
+          {error && <p className="member-error" role="alert">{error}</p>}
+        </form>
+      )}
+    </div>
+  )
+}
+
+function PullOutMemberSavingsForm({
+  member,
+  onPullOutSavings,
+}: {
+  member: Member
+  onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [date, setDate] = useState(getLocalDate)
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+  const parsedAmount = Number(amount)
+  const fee = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount * 0.1 : 0
+  const savingsInCents = Math.max(0, Math.round(getMemberSavings(member) * 100))
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (amount === '' || !Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setError('Enter a pull-out amount greater than zero.')
+      return
+    }
+
+    const amountInCents = Math.round(parsedAmount * 100)
+    if (amountInCents <= 0) {
+      setError('Enter a pull-out amount of at least one cent.')
+      return
+    }
+
+    if (amountInCents > savingsInCents) {
+      setError('The pull-out amount cannot exceed this member’s savings.')
+      return
+    }
+
+    if (!date || !reason.trim()) {
+      setError('Enter a date and reason for the pull-out.')
+      return
+    }
+
+    onPullOutSavings(member.name, amountInCents / 100, date, reason.trim())
+    setAmount('')
+    setDate(getLocalDate())
+    setReason('')
+    setError('')
+    setIsOpen(false)
+  }
+
+  return (
+    <div className="savings-member-actions">
+      {!isOpen ? (
+        <button type="button" className="secondary-button" onClick={() => setIsOpen(true)}>
+          Pull out savings
+        </button>
+      ) : (
+        <form className="pull-out-form" noValidate onSubmit={handleSubmit}>
+          <label>
+            Amount (PHP)
+            <input
+              type="number"
+              min="0"
+              max={savingsInCents / 100}
+              step="0.01"
+              value={amount}
+              onChange={(event) => {
+                setAmount(event.target.value)
+                setError('')
+              }}
+              placeholder="0"
+            />
+          </label>
+          <label>
+            Date
+            <input
+              type="date"
+              required
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value)
+                setError('')
+              }}
+            />
+          </label>
+          <label>
+            Reason
+            <input
+              type="text"
+              value={reason}
+              onChange={(event) => {
+                setReason(event.target.value)
+                setError('')
+              }}
+              placeholder="Reason for pull-out"
+            />
+          </label>
+          <div className="withdrawal-summary">
+            <span>10% deduction: {formatCurrency(fee)}</span>
+            <strong>Payout: {formatCurrency(Math.max(parsedAmount - fee, 0))}</strong>
+            <small>Available: {formatBorrowerCurrency(getMemberSavings(member))}</small>
+          </div>
+          <button type="submit" className="secondary-button">
+            Confirm pull-out
+          </button>
+          <button type="button" className="secondary-button" onClick={() => {
+            setIsOpen(false)
+            setError('')
+          }}>
+            Cancel
+          </button>
+          {error && <p className="member-error" role="alert">{error}</p>}
+        </form>
+      )}
+    </div>
+  )
 }
 
 function SavingsPage({
@@ -532,20 +863,17 @@ function SavingsPage({
   onMemberChange,
   onAddSavings,
   onPullOutSavings,
+  onEditMemberSavings,
   onDeleteMember,
   onClearSavingsTransactions,
 }: SavingsPageProps) {
-  const [savingsMember, setSavingsMember] = useState('')
-  const [savingsAmount, setSavingsAmount] = useState('')
-  const [savingsDate, setSavingsDate] = useState(getLocalDate)
-  const [savingsError, setSavingsError] = useState('')
-  const [withdrawalMember, setWithdrawalMember] = useState('')
-  const [withdrawalAmount, setWithdrawalAmount] = useState('')
-  const [withdrawalDate, setWithdrawalDate] = useState(getLocalDate)
-  const [withdrawalReason, setWithdrawalReason] = useState('')
-  const [withdrawalError, setWithdrawalError] = useState('')
   const [memberSearch, setMemberSearch] = useState('')
   const [deletingMemberName, setDeletingMemberName] = useState<string | null>(null)
+  const [editingSavingsMemberName, setEditingSavingsMemberName] = useState<string | null>(null)
+  const [editedSavingsAmount, setEditedSavingsAmount] = useState('')
+  const [savingsEditDate, setSavingsEditDate] = useState(getLocalDate)
+  const [savingsEditReason, setSavingsEditReason] = useState('')
+  const [savingsEditError, setSavingsEditError] = useState('')
   const [deleteAdminPassword, setDeleteAdminPassword] = useState('')
   const [deleteMemberError, setDeleteMemberError] = useState('')
   const [isDeletingMember, setIsDeletingMember] = useState(false)
@@ -557,79 +885,6 @@ function SavingsPage({
   const filteredMembers = members.filter((member) =>
     member.name.toLowerCase().includes(memberSearch.trim().toLowerCase()),
   )
-  const selectedWithdrawalMember = members.find((member) =>
-    member.name === (withdrawalMember || (selectedMember !== 'all' ? selectedMember : '')),
-  )
-  const parsedWithdrawalAmount = Number(withdrawalAmount)
-  const withdrawalFee = Number.isFinite(parsedWithdrawalAmount) && parsedWithdrawalAmount > 0
-    ? parsedWithdrawalAmount * 0.1
-    : 0
-
-  const handleAddSavings = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const memberName = isAdmin
-      ? savingsMember || (selectedMember !== 'all' ? selectedMember : '')
-      : members[0]?.name ?? ''
-    const amount = Number(savingsAmount)
-
-    if (!members.some((member) => member.name === memberName)) {
-      setSavingsError('Select a member to add savings to.')
-      return
-    }
-
-    if (savingsAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setSavingsError('Enter a savings amount greater than zero.')
-      return
-    }
-
-    if (!savingsDate) {
-      setSavingsError('Choose a date for this savings entry.')
-      return
-    }
-
-    onAddSavings(memberName, amount, savingsDate)
-    setSavingsAmount('')
-    setSavingsDate(getLocalDate())
-    setSavingsError('')
-  }
-
-  const handlePullOutSavings = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const memberName = isAdmin
-      ? withdrawalMember || (selectedMember !== 'all' ? selectedMember : '')
-      : members[0]?.name ?? ''
-    const amount = Number(withdrawalAmount)
-    const member = members.find((entry) => entry.name === memberName)
-
-    if (!member) {
-      setWithdrawalError('Select a member to pull savings from.')
-      return
-    }
-
-    if (withdrawalAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setWithdrawalError('Enter a pull-out amount greater than zero.')
-      return
-    }
-
-    const amountInCents = Math.round(amount * 100)
-    const savingsInCents = Math.round(getMemberSavings(member) * 100)
-    if (amountInCents > savingsInCents) {
-      setWithdrawalError('The pull-out amount cannot exceed this member’s savings.')
-      return
-    }
-
-    if (!withdrawalDate || !withdrawalReason.trim()) {
-      setWithdrawalError('Enter a date and reason for the pull-out.')
-      return
-    }
-
-    onPullOutSavings(memberName, amountInCents / 100, withdrawalDate, withdrawalReason.trim())
-    setWithdrawalAmount('')
-    setWithdrawalDate(getLocalDate())
-    setWithdrawalReason('')
-    setWithdrawalError('')
-  }
-
   const handleDeleteMember = async (event: FormEvent<HTMLFormElement>, memberName: string) => {
     event.preventDefault()
     setIsDeletingMember(true)
@@ -648,6 +903,32 @@ function SavingsPage({
     } finally {
       setIsDeletingMember(false)
     }
+  }
+
+  const handleEditMemberSavings = (event: FormEvent<HTMLFormElement>, member: Member) => {
+    event.preventDefault()
+    const amount = Number(editedSavingsAmount)
+    const amountInCents = Math.round(amount * 100)
+    if (editedSavingsAmount === '' || !Number.isFinite(amount) || amount < 0
+      || !Number.isSafeInteger(amountInCents)) {
+      setSavingsEditError('Enter a valid savings amount of zero or more.')
+      return
+    }
+    if (!savingsEditDate || !savingsEditReason.trim()) {
+      setSavingsEditError('Choose a date and enter a reason for this adjustment.')
+      return
+    }
+    if (amountInCents === Math.round(getMemberSavings(member) * 100)) {
+      setSavingsEditError('Enter an amount different from the current savings.')
+      return
+    }
+
+    onEditMemberSavings(member.name, amountInCents / 100, savingsEditReason.trim(), savingsEditDate)
+    setEditingSavingsMemberName(null)
+    setEditedSavingsAmount('')
+    setSavingsEditDate(getLocalDate())
+    setSavingsEditReason('')
+    setSavingsEditError('')
   }
 
   const handleClearSavingsTransactions = async (event: FormEvent<HTMLFormElement>) => {
@@ -749,141 +1030,8 @@ function SavingsPage({
               />
             </div>
             <small>{goal.target} target</small>
-            {canEditSavings && goal.name === 'Home down payment' && (
-              <div className="member-savings-actions">
-                <form className="add-savings-form" noValidate onSubmit={handleAddSavings}>
-                {isAdmin ? (
-                  <label>
-                    Member
-                    <select
-                      value={savingsMember || (selectedMember !== 'all' ? selectedMember : '')}
-                      onChange={(event) => {
-                        setSavingsMember(event.target.value)
-                        setSavingsError('')
-                      }}
-                    >
-                      <option value="">Select a member</option>
-                      {members.map((member) => (
-                        <option key={member.name} value={member.name}>{member.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <span className="member-select-label">Member: {members[0]?.name}</span>
-                )}
-                <label>
-                  Amount (PHP)
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={savingsAmount}
-                    onChange={(event) => {
-                      setSavingsAmount(event.target.value)
-                      setSavingsError('')
-                    }}
-                    placeholder="0"
-                  />
-                </label>
-                <label>
-                  Date
-                  <input
-                    type="date"
-                    required
-                    value={savingsDate}
-                    onChange={(event) => {
-                      setSavingsDate(event.target.value)
-                      setSavingsError('')
-                    }}
-                  />
-                </label>
-                <button type="submit" className="primary-button" disabled={members.length === 0}>
-                  Add savings
-                </button>
-                {savingsError && <p className="member-error" role="alert">{savingsError}</p>}
-                </form>
-              </div>
-            )}
           </article>
         ))}
-        {canEditSavings && <article className="panel stat-panel pull-out-card">
-          <div>
-            <p className="eyebrow">Withdrawal</p>
-            <h3>Pull out savings</h3>
-          </div>
-          <form className="pull-out-form" noValidate onSubmit={handlePullOutSavings}>
-            {isAdmin ? (
-              <label>
-                Member
-                <select
-                  value={withdrawalMember || (selectedMember !== 'all' ? selectedMember : '')}
-                  onChange={(event) => {
-                    setWithdrawalMember(event.target.value)
-                    setWithdrawalError('')
-                  }}
-                >
-                  <option value="">Select a member</option>
-                  {members.map((member) => (
-                    <option key={member.name} value={member.name}>{member.name}</option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <span className="member-select-label">Member: {members[0]?.name}</span>
-            )}
-            <label>
-              Amount (PHP)
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={withdrawalAmount}
-                onChange={(event) => {
-                  setWithdrawalAmount(event.target.value)
-                  setWithdrawalError('')
-                }}
-                placeholder="0"
-              />
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                required
-                value={withdrawalDate}
-                onChange={(event) => {
-                  setWithdrawalDate(event.target.value)
-                  setWithdrawalError('')
-                }}
-              />
-            </label>
-            <label>
-              Reason
-              <input
-                type="text"
-                value={withdrawalReason}
-                onChange={(event) => {
-                  setWithdrawalReason(event.target.value)
-                  setWithdrawalError('')
-                }}
-                placeholder="Reason for pull-out"
-              />
-            </label>
-            <div className="withdrawal-summary">
-              <span>10% deduction: {formatCurrency(withdrawalFee)}</span>
-              <strong>
-                Payout: {formatCurrency(Math.max(parsedWithdrawalAmount - withdrawalFee, 0))}
-              </strong>
-              {selectedWithdrawalMember && (
-                <small>Available: {formatCurrency(getMemberSavings(selectedWithdrawalMember))}</small>
-              )}
-            </div>
-            <button type="submit" className="secondary-button" disabled={members.length === 0}>
-              Pull out savings
-            </button>
-            {withdrawalError && <p className="member-error" role="alert">{withdrawalError}</p>}
-          </form>
-        </article>}
       </section>
 
       <section className="panel full-width-panel savings-directory-panel">
@@ -912,17 +1060,42 @@ function SavingsPage({
                   <div className="savings-member-header">
                     <strong>{member.name}</strong>
                     {isAdmin && (
-                      <button
-                        type="button"
-                        className="secondary-button delete-member-button"
-                        onClick={() => {
-                          setDeletingMemberName((currentName) => currentName === member.name ? null : member.name)
-                          setDeleteAdminPassword('')
-                          setDeleteMemberError('')
-                        }}
-                      >
-                        {deletingMemberName === member.name ? 'Cancel' : 'Delete'}
-                      </button>
+                      <div className="savings-member-header-actions">
+                        <button
+                          type="button"
+                          className="secondary-button edit-member-button"
+                          onClick={() => {
+                            if (editingSavingsMemberName === member.name) {
+                              setEditingSavingsMemberName(null)
+                              setSavingsEditError('')
+                              return
+                            }
+                            setEditingSavingsMemberName(member.name)
+                            setEditedSavingsAmount(getMemberSavings(member).toFixed(2))
+                            setSavingsEditDate(getLocalDate())
+                            setSavingsEditReason('')
+                            setSavingsEditError('')
+                            setDeletingMemberName(null)
+                            setDeleteAdminPassword('')
+                            setDeleteMemberError('')
+                          }}
+                        >
+                          {editingSavingsMemberName === member.name ? 'Cancel' : 'Edit'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button delete-member-button"
+                          onClick={() => {
+                            setDeletingMemberName((currentName) => currentName === member.name ? null : member.name)
+                            setDeleteAdminPassword('')
+                            setDeleteMemberError('')
+                            setEditingSavingsMemberName(null)
+                            setSavingsEditError('')
+                          }}
+                        >
+                          {deletingMemberName === member.name ? 'Cancel' : 'Delete'}
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div className="savings-member-metrics">
@@ -934,12 +1107,71 @@ function SavingsPage({
                       </strong>
                     </div>
                     <div className="savings-member-metric">
-                      <span>Amount guaranteed</span>
+                      <span>Guarantor Amount</span>
                       <strong>{formatCurrency(borrowers
                         .filter((borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase())
                         .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
                     </div>
                   </div>
+                  {isAdmin && editingSavingsMemberName === member.name && (
+                    <form
+                      className="edit-member-savings-form"
+                      noValidate
+                      onSubmit={(event) => handleEditMemberSavings(event, member)}
+                    >
+                      <p>
+                        Current savings: {formatCurrency(getMemberSavings(member))}. Saving a new amount creates a
+                        transaction showing the before and after balances.
+                      </p>
+                      <label>
+                        New savings amount (PHP)
+                        <input
+                          autoFocus
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editedSavingsAmount}
+                          onChange={(event) => {
+                            setEditedSavingsAmount(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Date
+                        <input
+                          type="date"
+                          required
+                          value={savingsEditDate}
+                          onChange={(event) => {
+                            setSavingsEditDate(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Reason
+                        <input
+                          type="text"
+                          required
+                          value={savingsEditReason}
+                          onChange={(event) => {
+                            setSavingsEditReason(event.target.value)
+                            setSavingsEditError('')
+                          }}
+                          placeholder="Reason for adjustment"
+                        />
+                      </label>
+                      <button type="submit" className="primary-button">Save adjustment</button>
+                      {savingsEditError && <p className="member-error" role="alert">{savingsEditError}</p>}
+                    </form>
+                  )}
+                  {canEditSavings && (
+                    <>
+                      <AddMemberSavingsForm memberName={member.name} onAddSavings={onAddSavings} />
+                      <PullOutMemberSavingsForm member={member} onPullOutSavings={onPullOutSavings} />
+                    </>
+                  )}
                   {isAdmin && deletingMemberName === member.name && (
                     <form
                       className="delete-member-form"
@@ -977,6 +1209,8 @@ function SavingsPage({
                             <small>
                               {formatDate(transaction.date)}
                               {transaction.reason && ` · ${transaction.reason}`}
+                              {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
                             </small>
                           </div>
                           <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
@@ -1072,6 +1306,8 @@ function SavingsPage({
                   <small>
                     {formatDate(transaction.date)}
                     {transaction.reason && ` · ${transaction.reason}`}
+                    {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                      && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
                     {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
                   </small>
                 </div>
@@ -1098,6 +1334,7 @@ function LoansPage({
   onPayBorrowerInterest,
   onPayBorrowerPrincipal,
   onAddBorrowerPrincipal,
+  onEditBorrowerPrincipal,
   onRemoveBorrower,
   onClearLoans,
   totalInterestPaid,
@@ -1106,10 +1343,11 @@ function LoansPage({
   guarantors: string[]
   isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
-  onAddBorrowerInterest: (borrowerId: string) => void
+  onAddBorrowerInterest: (borrowerId: string, date: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number, date: string) => void
   onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
-  onAddBorrowerPrincipal: (borrowerId: string, amount: number) => void
+  onAddBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
+  onEditBorrowerPrincipal: (borrowerId: string, amount: number, reason: string, date: string) => void
   onRemoveBorrower: (borrowerId: string) => void
   onClearLoans: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
   totalInterestPaid: number
@@ -1124,12 +1362,20 @@ function LoansPage({
   const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
   const [interestPaymentDate, setInterestPaymentDate] = useState(getLocalDate)
   const [interestPaymentError, setInterestPaymentError] = useState('')
+  const [addingInterestBorrowerId, setAddingInterestBorrowerId] = useState<string | null>(null)
+  const [interestAdditionDate, setInterestAdditionDate] = useState(getLocalDate)
+  const [interestAdditionError, setInterestAdditionError] = useState('')
   const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
   const [addingPrincipalBorrowerId, setAddingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
+  const [principalAdditionDate, setPrincipalAdditionDate] = useState(getLocalDate)
   const [principalAdditionError, setPrincipalAdditionError] = useState('')
+  const [editingPrincipalBorrowerId, setEditingPrincipalBorrowerId] = useState<string | null>(null)
+  const [editedPrincipalAmount, setEditedPrincipalAmount] = useState('')
+  const [principalEditReason, setPrincipalEditReason] = useState('')
+  const [principalEditError, setPrincipalEditError] = useState('')
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const [borrowerDirectoryFilter, setBorrowerDirectoryFilter] = useState<BorrowerDirectoryFilter>('all')
   const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
@@ -1274,6 +1520,18 @@ function LoansPage({
     setInterestPaymentError('')
   }
 
+  const handleAddBorrowerInterest = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    if (!interestAdditionDate) {
+      setInterestAdditionError('Select the date the interest was added.')
+      return
+    }
+
+    onAddBorrowerInterest(borrower.id, interestAdditionDate)
+    setAddingInterestBorrowerId(null)
+    setInterestAdditionError('')
+  }
+
   const handlePayBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
     event.preventDefault()
     if (hasOutstandingBorrowerBalance(borrower.paydayInterest)) {
@@ -1303,6 +1561,10 @@ function LoansPage({
 
   const handleAddBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
     event.preventDefault()
+    if (!principalAdditionDate) {
+      setPrincipalAdditionError('Select the date the principal was added.')
+      return
+    }
     const amount = Number(principalAdditionAmount)
     if (principalAdditionAmount === '' || !Number.isFinite(amount) || amount <= 0) {
       setPrincipalAdditionError('Enter an amount greater than zero.')
@@ -1314,10 +1576,34 @@ function LoansPage({
       return
     }
 
-    onAddBorrowerPrincipal(borrower.id, roundedAmount)
+    onAddBorrowerPrincipal(borrower.id, roundedAmount, principalAdditionDate)
     setAddingPrincipalBorrowerId(null)
     setPrincipalAdditionAmount('')
+    setPrincipalAdditionDate(getLocalDate())
     setPrincipalAdditionError('')
+  }
+
+  const handleEditBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    const amount = Number(editedPrincipalAmount)
+    const roundedAmount = Number(amount.toFixed(2))
+    if (editedPrincipalAmount === '' || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(roundedAmount)) {
+      setPrincipalEditError('Enter a principal amount of zero or greater.')
+      return
+    }
+    if (!principalEditReason.trim()) {
+      setPrincipalEditError('Enter a reason for editing the principal.')
+      return
+    }
+    if (roundedAmount === Number(borrower.loanAmount.toFixed(2))) {
+      setPrincipalEditError('Enter a principal amount different from the current value.')
+      return
+    }
+    onEditBorrowerPrincipal(borrower.id, roundedAmount, principalEditReason.trim(), getLocalDate())
+    setEditingPrincipalBorrowerId(null)
+    setEditedPrincipalAmount('')
+    setPrincipalEditReason('')
+    setPrincipalEditError('')
   }
 
   return (
@@ -1328,11 +1614,6 @@ function LoansPage({
           <h2>LOANS</h2>
         </div>
         <time className="loans-current-date" dateTime={getLocalDate()}>{formatDate(getLocalDate())}</time>
-        <div className="loans-actions">
-          <button type="button" className="secondary-button" onClick={() => setIsAddingBorrower((open) => !open)}>
-            {isAddingBorrower ? 'Cancel' : 'Add borrower'}
-          </button>
-        </div>
       </section>
 
       <section className="panel full-width-panel loan-proceeds-panel">
@@ -1427,6 +1708,9 @@ function LoansPage({
             <h3>Borrower directory</h3>
           </div>
           <div className="borrower-directory-controls">
+            <button type="button" className="secondary-button" onClick={() => setIsAddingBorrower((open) => !open)}>
+              {isAddingBorrower ? 'Cancel' : 'Add borrower'}
+            </button>
             {isAdmin && (isClearConfirmationOpen ? (
               <form className="clear-loans-form" noValidate onSubmit={(event) => void handleClearLoans(event)}>
                 <label>
@@ -1516,12 +1800,27 @@ function LoansPage({
                     {section.borrowers.map((borrower) => (
               <li key={borrower.id} className="borrower-item">
                 <div className="borrower-item-header">
-                  <strong>{borrower.name}</strong>
+                  <div className="borrower-name-principal">
+                    <strong>{borrower.name}</strong>
+                    <span>Initial principal: {formatBorrowerCurrency(
+                      borrower.transactions.find((transaction) => transaction.type === 'loan')?.amount
+                      ?? borrower.loanAmount,
+                    )}</span>
+                  </div>
                   <div className="borrower-actions">
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      onClick={() => onAddBorrowerInterest(borrower.id)}
+                      onClick={() => {
+                        setAddingInterestBorrowerId((currentId) =>
+                          currentId === borrower.id ? null : borrower.id,
+                        )
+                        setInterestAdditionDate(getLocalDate())
+                        setInterestAdditionError('')
+                        setPayingBorrowerId(null)
+                        setPayingPrincipalBorrowerId(null)
+                        setAddingPrincipalBorrowerId(null)
+                      }}
                     >
                       Add interest
                     </button>
@@ -1544,6 +1843,7 @@ function LoansPage({
                       onClick={() => {
                         setAddingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalAdditionAmount('')
+                        setPrincipalAdditionDate(getLocalDate())
                         setPrincipalAdditionError('')
                         setPayingPrincipalBorrowerId(null)
                         setPayingBorrowerId(null)
@@ -1551,6 +1851,23 @@ function LoansPage({
                     >
                       Add principal
                     </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="secondary-button borrower-interest-button"
+                        onClick={() => {
+                          setEditingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
+                          setEditedPrincipalAmount(borrower.loanAmount.toFixed(2))
+                          setPrincipalEditReason('')
+                          setPrincipalEditError('')
+                          setAddingPrincipalBorrowerId(null)
+                          setPayingPrincipalBorrowerId(null)
+                          setPayingBorrowerId(null)
+                        }}
+                      >
+                        Edit principal
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
@@ -1575,6 +1892,38 @@ function LoansPage({
                     </button>
                   </div>
                 </div>
+                {addingInterestBorrowerId === borrower.id && (
+                  <form
+                    className="interest-payment-form"
+                    noValidate
+                    onSubmit={(event) => handleAddBorrowerInterest(event, borrower)}
+                  >
+                    <label>
+                      Interest date
+                      <input
+                        type="date"
+                        required
+                        value={interestAdditionDate}
+                        onChange={(event) => {
+                          setInterestAdditionDate(event.target.value)
+                          setInterestAdditionError('')
+                        }}
+                      />
+                    </label>
+                    <button type="submit" className="primary-button">Add interest</button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setAddingInterestBorrowerId(null)
+                        setInterestAdditionError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {interestAdditionError && <p className="member-error" role="alert">{interestAdditionError}</p>}
+                  </form>
+                )}
                 <div className="borrower-metrics">
                   {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
                   <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
@@ -1665,12 +2014,72 @@ function LoansPage({
                     {principalPaymentError && <p className="member-error" role="alert">{principalPaymentError}</p>}
                   </form>
                 )}
+                {editingPrincipalBorrowerId === borrower.id && (
+                  <form
+                    className="interest-payment-form"
+                    noValidate
+                    onSubmit={(event) => handleEditBorrowerPrincipal(event, borrower)}
+                  >
+                    <label>
+                      New principal (PHP)
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        required
+                        value={editedPrincipalAmount}
+                        onChange={(event) => {
+                          setEditedPrincipalAmount(event.target.value)
+                          setPrincipalEditError('')
+                        }}
+                      />
+                    </label>
+                    <label>
+                      Reason for editing
+                      <input
+                        type="text"
+                        maxLength={500}
+                        required
+                        value={principalEditReason}
+                        onChange={(event) => {
+                          setPrincipalEditReason(event.target.value)
+                          setPrincipalEditError('')
+                        }}
+                        placeholder="Explain the principal correction"
+                      />
+                    </label>
+                    <button type="submit" className="primary-button">Save principal</button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setEditingPrincipalBorrowerId(null)
+                        setPrincipalEditError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {principalEditError && <p className="member-error" role="alert">{principalEditError}</p>}
+                  </form>
+                )}
                 {addingPrincipalBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
                     onSubmit={(event) => handleAddBorrowerPrincipal(event, borrower)}
                   >
+                    <label>
+                      Date added
+                      <input
+                        type="date"
+                        required
+                        value={principalAdditionDate}
+                        onChange={(event) => {
+                          setPrincipalAdditionDate(event.target.value)
+                          setPrincipalAdditionError('')
+                        }}
+                      />
+                    </label>
                     <label>
                       Amount to add
                       <input
@@ -1713,10 +2122,19 @@ function LoansPage({
                                 ? 'Principal paid'
                                 : transaction.type === 'principal-addition'
                                   ? 'Principal added'
+                                  : transaction.type === 'principal-adjustment'
+                                    ? 'Principal edited'
                                   : transaction.type === 'interest' ? 'Interest' : 'Loan'}
                           </span>
-                          <strong>{transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}{formatBorrowerCurrency(transaction.amount)}</strong>
+                          <strong>
+                              {transaction.type === 'principal-adjustment' && transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                ? `${formatBorrowerCurrency(transaction.previousAmount)} → ${formatBorrowerCurrency(transaction.newAmount)}`
+                                : `${transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}${formatBorrowerCurrency(transaction.amount)}`}
+                          </strong>
                           <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
+                          {transaction.type === 'principal-adjustment' && transaction.reason && (
+                              <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -1761,14 +2179,25 @@ function LoansPage({
                         ? 'Principal paid'
                         : transaction.type === 'principal-addition'
                           ? 'Principal added'
+                          : transaction.type === 'principal-adjustment'
+                            ? 'Principal edited'
                           : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
                     {' · '}{transaction.borrowerName}
                   </strong>
                   <small>{formatDate(transaction.date)}</small>
+                  {transaction.type === 'principal-adjustment' && transaction.reason && (
+                    <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
+                  )}
                 </div>
-                <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                  {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                </span>
+                {transaction.type === 'principal-adjustment'
+                  && transaction.previousAmount !== undefined
+                  && transaction.newAmount !== undefined ? (
+                    <span>{formatCurrency(transaction.previousAmount)} → {formatCurrency(transaction.newAmount)}</span>
+                  ) : (
+                    <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                      {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                    </span>
+                  )}
               </li>
             ))}
           </ul>
@@ -1810,6 +2239,7 @@ function ProfitsPage({
 }) {
   const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
   const [profitDateTo, setProfitDateTo] = useState(getLocalDate)
+  const [selectedProfitTransferDate, setSelectedProfitTransferDate] = useState('')
   const [isTransferFormOpen, setIsTransferFormOpen] = useState(false)
   const [transferDateFrom, setTransferDateFrom] = useState(`${currentYear}-01-01`)
   const [transferDateTo, setTransferDateTo] = useState(getLocalDate)
@@ -1820,6 +2250,12 @@ function ProfitsPage({
   const [clearProfitError, setClearProfitError] = useState('')
   const [isClearingProfit, setIsClearingProfit] = useState(false)
   const profitTransferred = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
+  const profitTransferDates = [...new Set(profitTransfers.map((transfer) => transfer.date))]
+    .sort((first, second) => second.localeCompare(first))
+  const activeProfitTransferDate = profitTransferDates.includes(selectedProfitTransferDate)
+    ? selectedProfitTransferDate
+    : profitTransferDates[0] ?? ''
+  const selectedProfitTransfers = profitTransfers.filter((transfer) => transfer.date === activeProfitTransferDate)
   const profitBalance = Number(Math.max(0, totalInterestPaid - profitTransferred).toFixed(2))
   const interestPayments = [
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
@@ -1890,7 +2326,7 @@ function ProfitsPage({
     { label: 'Group allowance', value: formatCurrency(totalGroupAllowance), tone: 'positive' },
     { label: 'Group oprtng cost', value: '₱7,540', tone: 'negative' },
   ]
-  const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const totalSavings = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
   const settledTransfersByMember = new Map<string, number>()
   const legacyCashoutsByMember = new Map<string, number>()
   profitCashouts.forEach((cashout) => {
@@ -1919,7 +2355,7 @@ function ProfitsPage({
     }
   })
   const memberProfits = members.map((member) => {
-    const memberSavings = getMemberSavings(member)
+    const memberSavings = getMemberProfitShareSavings(member)
     const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
     const settledTransfers = settledTransfersByMember.get(member.name)
     const eligibleTransfers = settledTransfers === undefined
@@ -1935,7 +2371,7 @@ function ProfitsPage({
   const [memberPenaltyAmounts, setMemberPenaltyAmounts] = useState<Record<string, string>>({})
 
   return (
-    <main className="page-view">
+    <main className="page-view profits-page">
       <section className="page-header">
         <div>
           <p className="eyebrow">Profits</p>
@@ -1990,7 +2426,29 @@ function ProfitsPage({
                   </div>
                   <div>
                     <span>Profit transferred</span>
-                    <strong>{formatCurrency(profitTransferred)}</strong>
+                    {profitTransfers.length > 0 ? (
+                      <>
+                        <select
+                          className="profit-transfer-date-select"
+                          aria-label="Select profit transfer date"
+                          value={activeProfitTransferDate}
+                          onChange={(event) => setSelectedProfitTransferDate(event.target.value)}
+                        >
+                          {profitTransferDates.map((date) => (
+                            <option key={date} value={date}>{formatDate(date)}</option>
+                          ))}
+                        </select>
+                        <ul className="profit-transfer-history">
+                          {selectedProfitTransfers.map((transfer, index) => (
+                            <li key={`${transfer.date}-${index}`}>
+                              <strong>{formatCurrency(transfer.amount)}</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <small className="profit-transfer-empty">No transfers yet.</small>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -2068,14 +2526,14 @@ function ProfitsPage({
         ))}
       </section>
 
-      <section className="panel full-width-panel">
+      <section className="panel full-width-panel profits-section profits-received-section">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Received payments</p>
             <h3>Interest received</h3>
           </div>
           <input
-            className="borrower-search"
+            className="borrower-search profits-payment-search"
             type="search"
             aria-label="Search received interest payments by borrower"
             placeholder="Search borrower"
@@ -2101,25 +2559,53 @@ function ProfitsPage({
           </p>
         )}
       </section>
-
-      <section className="panel full-width-panel">
+      <section className="panel full-width-panel profits-section profits-member-summary-section">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Overview</p>
+            <h3>Members Profit Summary</h3>
+          </div>
+        </div>
+        {memberProfits.length > 0 ? (
+          <ul className="profits-member-summary-list">
+            {memberProfits.map(({ member, sharePercentage, profitShare }) => (
+              <li key={member.name} className="profits-member-summary-row">
+                <strong>{member.name}</strong>
+                <span>
+                  <small>Profit</small>
+                  <b>{formatCurrency(profitShare)}</b>
+                </span>
+                <span>
+                  <small>Savings share</small>
+                  <b>{sharePercentage.toFixed(1)}%</b>
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="savings-history-empty">No member profit shares to summarize.</p>
+        )}
+      </section>
+      <section className="panel full-width-panel profits-section profits-members-section">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Members</p>
             <h3>Members Profit</h3>
           </div>
         </div>
-        <div className="stats-grid">
+        <div className="stats-grid profits-member-grid">
           {memberProfits.map(({ member, sharePercentage, profitShare }) => {
             const action = memberProfitActions[member.name] ?? 'add to savings'
             const penaltyAmountValue = memberPenaltyAmounts[member.name] ?? ''
             const penaltyAmount = Number(penaltyAmountValue)
             const memberSavings = getMemberSavings(member)
             return (
-              <div key={member.name} className="stat-box member-profit-box">
+              <div key={member.name} className="stat-box member-profit-box profits-member-card">
                 <span>{member.name}</span>
                 <strong>{formatCurrency(profitShare)}</strong>
-                <small>{sharePercentage.toFixed(1)}% of savings</small>
+                <small title="Calculated from savings excluding profits already added to savings">
+                  {sharePercentage.toFixed(1)}% savings share
+                </small>
                 <div className="member-profit-actions">
                   <div className="member-profit-primary-action">
                     <label>
@@ -2178,7 +2664,7 @@ function ProfitsPage({
           })}
         </div>
       </section>
-      <section className="panel full-width-panel">
+      <section className="panel full-width-panel profits-section profits-payouts-section">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Member payouts</p>
@@ -2259,6 +2745,352 @@ function ProfitsPage({
         ) : (
           <p className="savings-history-empty">No profit transactions yet.</p>
         )}
+      </section>
+    </main>
+  )
+}
+
+type GroupOperationCost = { id: string; description: string; amount: number; date: string }
+type GroupUpdateData = {
+  operationCosts: GroupOperationCost[]
+  meetingSchedule: string
+  meetingPlace: string
+  meetingPenalty: number
+  boardOfDirectors: string[]
+  announcements: GroupAnnouncement[]
+}
+
+const GROUP_UPDATE_STORAGE_KEY = 'funds-organizer-group-update-v1'
+
+const emptyGroupUpdateData = (): GroupUpdateData => ({
+  operationCosts: [],
+  meetingSchedule: '',
+  meetingPlace: '',
+  meetingPenalty: 0,
+  boardOfDirectors: [],
+  announcements: [],
+})
+
+const isGroupUpdateData = (value: unknown): value is GroupUpdateData => {
+  if (!value || typeof value !== 'object') return false
+  const data = value as Record<string, unknown>
+  return Array.isArray(data.operationCosts)
+    && data.operationCosts.every((cost) =>
+      typeof cost.id === 'string'
+      && typeof cost.description === 'string'
+      && typeof cost.amount === 'number'
+      && Number.isFinite(cost.amount)
+      && typeof cost.date === 'string',
+    )
+    && typeof data.meetingSchedule === 'string'
+    && typeof data.meetingPlace === 'string'
+    && typeof data.meetingPenalty === 'number'
+    && Number.isFinite(data.meetingPenalty)
+    && Array.isArray(data.boardOfDirectors)
+    && data.boardOfDirectors.every((director) => typeof director === 'string')
+    && Array.isArray(data.announcements)
+    && data.announcements.every((announcement) =>
+      typeof announcement.id === 'string'
+      && typeof announcement.title === 'string'
+      && typeof announcement.message === 'string'
+      && typeof announcement.date === 'string',
+    )
+}
+
+const loadGroupUpdateData = () => {
+  try {
+    const savedData = localStorage.getItem(GROUP_UPDATE_STORAGE_KEY)
+    if (!savedData) return { data: emptyGroupUpdateData(), error: '' }
+    const parsed: unknown = JSON.parse(savedData)
+    return isGroupUpdateData(parsed)
+      ? { data: parsed, error: '' }
+      : { data: emptyGroupUpdateData(), error: 'Saved group update data is invalid and could not be loaded.' }
+  } catch (error) {
+    return {
+      data: emptyGroupUpdateData(),
+      error: error instanceof Error
+        ? `Could not load group update data: ${error.message}`
+        : 'Could not load group update data.',
+    }
+  }
+}
+
+function GroupUpdatePage() {
+  const [loadedData] = useState(loadGroupUpdateData)
+  const [data, setData] = useState<GroupUpdateData>(loadedData.data)
+  const [storageError, setStorageError] = useState(loadedData.error)
+  const [costDescription, setCostDescription] = useState('')
+  const [costAmount, setCostAmount] = useState('')
+  const [costDate, setCostDate] = useState(getLocalDate)
+  const [costError, setCostError] = useState('')
+  const [meetingError, setMeetingError] = useState('')
+  const [directorName, setDirectorName] = useState('')
+  const [directorError, setDirectorError] = useState('')
+  const [announcementTitle, setAnnouncementTitle] = useState('')
+  const [announcementMessage, setAnnouncementMessage] = useState('')
+  const [announcementError, setAnnouncementError] = useState('')
+
+  const updateData = (update: (current: GroupUpdateData) => GroupUpdateData) => {
+    const nextData = update(data)
+    setData(nextData)
+    try {
+      localStorage.setItem(GROUP_UPDATE_STORAGE_KEY, JSON.stringify(nextData))
+      setStorageError('')
+    } catch (error) {
+      setStorageError(error instanceof Error
+        ? `Could not save group update data: ${error.message}`
+        : 'Could not save group update data.')
+    }
+  }
+
+  const handleAddOperationCost = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const amount = Number(costAmount)
+    if (!costDescription.trim()) {
+      setCostError('Enter a description for the operating cost.')
+      return
+    }
+    if (costAmount === '' || !Number.isFinite(amount) || amount <= 0) {
+      setCostError('Enter an amount greater than zero.')
+      return
+    }
+    if (!costDate) {
+      setCostError('Choose a date for this operating cost.')
+      return
+    }
+
+    updateData((current) => ({
+      ...current,
+      operationCosts: [{
+        id: crypto.randomUUID(),
+        description: costDescription.trim(),
+        amount,
+        date: costDate,
+      }, ...current.operationCosts],
+    }))
+    setCostDescription('')
+    setCostAmount('')
+    setCostDate(getLocalDate())
+    setCostError('')
+  }
+
+  const handleAddDirector = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = directorName.trim()
+    if (!name) {
+      setDirectorError('Enter a director name.')
+      return
+    }
+    if (data.boardOfDirectors.some((director) => director.toLowerCase() === name.toLowerCase())) {
+      setDirectorError('This director is already listed.')
+      return
+    }
+    updateData((current) => ({ ...current, boardOfDirectors: [...current.boardOfDirectors, name] }))
+    setDirectorName('')
+    setDirectorError('')
+  }
+
+  const handleAddAnnouncement = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!announcementTitle.trim() || !announcementMessage.trim()) {
+      setAnnouncementError('Enter a title and announcement.')
+      return
+    }
+    updateData((current) => ({
+      ...current,
+      announcements: [{
+        id: crypto.randomUUID(),
+        title: announcementTitle.trim(),
+        message: announcementMessage.trim(),
+        date: getLocalDate(),
+      }, ...current.announcements],
+    }))
+    setAnnouncementTitle('')
+    setAnnouncementMessage('')
+    setAnnouncementError('')
+  }
+
+  const totalOperationCosts = data.operationCosts.reduce((total, cost) => total + cost.amount, 0)
+  const mapUrl = data.meetingPlace.trim()
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(data.meetingPlace.trim())}`
+    : ''
+
+  return (
+    <main className="page-view group-update-page">
+      <section className="page-header">
+        <div>
+          <p className="eyebrow">Group</p>
+          <h2>Group Update</h2>
+          <p className="group-update-description">Manage group costs, meetings, leadership, and announcements.</p>
+        </div>
+      </section>
+      {storageError && <p className="member-error group-update-error" role="alert">{storageError}</p>}
+
+      <section className="group-update-grid">
+        <article className="panel group-update-card">
+          <div className="group-update-card-header">
+            <div>
+              <p className="eyebrow">Finance</p>
+              <h3>Group Operation Cost</h3>
+            </div>
+            <strong className="group-update-total">{formatCurrency(totalOperationCosts)}</strong>
+          </div>
+          <form className="group-update-form" noValidate onSubmit={handleAddOperationCost}>
+            <label>
+              Description
+              <input value={costDescription} onChange={(event) => setCostDescription(event.target.value)} placeholder="e.g. Meeting supplies" />
+            </label>
+            <div className="group-update-inline-fields">
+              <label>
+                Amount (PHP)
+                <input type="number" min="0" step="0.01" value={costAmount} onChange={(event) => setCostAmount(event.target.value)} placeholder="0.00" />
+              </label>
+              <label>
+                Date
+                <input type="date" value={costDate} onChange={(event) => setCostDate(event.target.value)} />
+              </label>
+            </div>
+            <button type="submit" className="primary-button">Add operation cost</button>
+            {costError && <p className="member-error" role="alert">{costError}</p>}
+          </form>
+          {data.operationCosts.length > 0 ? (
+            <ul className="group-update-list">
+              {data.operationCosts.map((cost) => (
+                <li key={cost.id}>
+                  <div><strong>{cost.description}</strong><small>{formatDate(cost.date)}</small></div>
+                  <span>{formatBorrowerCurrency(cost.amount)}</span>
+                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove operation cost ${cost.description}`} onClick={() => updateData((current) => ({
+                    ...current,
+                    operationCosts: current.operationCosts.filter((item) => item.id !== cost.id),
+                  }))}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="group-update-empty">No operation costs recorded.</p>}
+        </article>
+
+        <article className="panel group-update-card">
+          <div className="group-update-card-header">
+            <div>
+              <p className="eyebrow">Schedule</p>
+              <h3>Meeting</h3>
+            </div>
+          </div>
+          <div className="group-update-form">
+            <label>
+              Schedule
+              <input
+                type="datetime-local"
+                value={data.meetingSchedule}
+                onChange={(event) => updateData((current) => ({ ...current, meetingSchedule: event.target.value }))}
+              />
+            </label>
+            <label>
+              Place
+              <input
+                value={data.meetingPlace}
+                onChange={(event) => updateData((current) => ({ ...current, meetingPlace: event.target.value }))}
+                placeholder="Enter meeting address or place"
+              />
+            </label>
+            <label>
+              Penalty for not attending (PHP)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={data.meetingPenalty}
+                onChange={(event) => {
+                  const penalty = Number(event.target.value)
+                  if (!Number.isFinite(penalty) || penalty < 0) {
+                    setMeetingError('Meeting penalty must be zero or greater.')
+                    return
+                  }
+                  setMeetingError('')
+                  updateData((current) => ({ ...current, meetingPenalty: penalty }))
+                }}
+              />
+            </label>
+            <div className="group-update-actions">
+              {mapUrl && <a className="secondary-button group-update-map-link" href={mapUrl} target="_blank" rel="noreferrer">Open map</a>}
+              <small>Meeting details save automatically.</small>
+            </div>
+            {meetingError && <p className="member-error" role="alert">{meetingError}</p>}
+          </div>
+          {data.meetingSchedule && (
+            <p className="group-update-meeting-preview">
+              Next meeting: {new Intl.DateTimeFormat('en-PH', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(data.meetingSchedule))}
+            </p>
+          )}
+        </article>
+
+        <article className="panel group-update-card">
+          <div className="group-update-card-header">
+            <div>
+              <p className="eyebrow">Leadership</p>
+              <h3>Board of Directors</h3>
+            </div>
+          </div>
+          <form className="group-update-form" noValidate onSubmit={handleAddDirector}>
+            <label>
+              Director name
+              <input value={directorName} onChange={(event) => setDirectorName(event.target.value)} placeholder="Enter a name" />
+            </label>
+            <button type="submit" className="primary-button">Add director</button>
+            {directorError && <p className="member-error" role="alert">{directorError}</p>}
+          </form>
+          {data.boardOfDirectors.length > 0 ? (
+            <ul className="group-update-list">
+              {data.boardOfDirectors.map((director) => (
+                <li key={director}>
+                  <strong>{director}</strong>
+                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove ${director}`} onClick={() => updateData((current) => ({
+                    ...current,
+                    boardOfDirectors: current.boardOfDirectors.filter((name) => name !== director),
+                  }))}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="group-update-empty">No directors listed.</p>}
+        </article>
+
+        <article className="panel group-update-card">
+          <div className="group-update-card-header">
+            <div>
+              <p className="eyebrow">Updates</p>
+              <h3>Announcements</h3>
+            </div>
+          </div>
+          <form className="group-update-form" noValidate onSubmit={handleAddAnnouncement}>
+            <label>
+              Title
+              <input value={announcementTitle} onChange={(event) => setAnnouncementTitle(event.target.value)} placeholder="Announcement title" />
+            </label>
+            <label>
+              Announcement
+              <textarea value={announcementMessage} onChange={(event) => setAnnouncementMessage(event.target.value)} placeholder="Write an update for the group" rows={3} />
+            </label>
+            <button type="submit" className="primary-button">Post announcement</button>
+            {announcementError && <p className="member-error" role="alert">{announcementError}</p>}
+          </form>
+          {data.announcements.length > 0 ? (
+            <ul className="group-update-list group-announcement-list">
+              {data.announcements.map((announcement) => (
+                <li key={announcement.id}>
+                  <div>
+                    <strong>{announcement.title}</strong>
+                    <small>{formatDate(announcement.date)}</small>
+                    <p>{announcement.message}</p>
+                  </div>
+                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove announcement ${announcement.title}`} onClick={() => updateData((current) => ({
+                    ...current,
+                    announcements: current.announcements.filter((item) => item.id !== announcement.id),
+                  }))}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="group-update-empty">No announcements posted.</p>}
+        </article>
       </section>
     </main>
   )
@@ -2405,11 +3237,14 @@ function App() {
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
+  const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, currentYear)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
     (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
     0,
   ), 0)
+  const cashOutTransactions = getOverviewCashOutTransactions(members, borrowers, profitCashouts)
+  const cashInTransactions = getOverviewCashInTransactions(members, borrowers, removedBorrowerTransactions)
   const registeredGuarantors = accounts
     .flatMap((account) => {
       const email = account.email.trim().toLowerCase()
@@ -2716,6 +3551,27 @@ function App() {
     )
   }
 
+  const editMemberSavings = (memberName: string, amount: number, reason: string, date: string) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
+      || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim() || !date) return
+    const newAmount = Number(amount.toFixed(2))
+    setMembers((currentMembers) => currentMembers.map((member) => {
+      if (member.name !== memberName) return member
+      const previousAmount = Number(getMemberSavings(member).toFixed(2))
+      if (previousAmount === newAmount) return member
+      return {
+        ...member,
+        adjustments: [...(member.adjustments ?? []), {
+          id: crypto.randomUUID(),
+          previousAmount,
+          newAmount,
+          date,
+          reason: reason.trim(),
+        }],
+      }
+    }))
+  }
+
   const applyMemberProfitAction = (
     memberName: string,
     amount: number,
@@ -2917,6 +3773,16 @@ function App() {
         details: withdrawal.reason,
         deletedAt: resetDate,
       })),
+      ...(member.adjustments ?? []).map((adjustment) => ({
+        memberName: member.name,
+        type: 'adjustment' as const,
+        amount: Number((adjustment.newAmount - adjustment.previousAmount).toFixed(2)),
+        date: adjustment.date,
+        details: adjustment.reason,
+        previousAmount: adjustment.previousAmount,
+        newAmount: adjustment.newAmount,
+        deletedAt: resetDate,
+      })),
     ])
     setDeletedSavingsTransactions((currentTransactions) => [
       ...currentTransactions,
@@ -2928,6 +3794,7 @@ function App() {
       initialSavingsDate: resetDate,
       contributions: [],
       withdrawals: [],
+      adjustments: [],
     })))
     return { success: true }
   }
@@ -3046,7 +3913,7 @@ function App() {
     ))
   }
 
-  const addBorrowerInterest = (borrowerId: string) => {
+  const addBorrowerInterest = (borrowerId: string, date: string) => {
     if (signedInRole !== 'admin') return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
@@ -3056,7 +3923,7 @@ function App() {
         id: crypto.randomUUID(),
         type: 'interest' as const,
         amount: accruedInterest,
-        date: getLocalDate(),
+        date,
       }
       return {
         ...borrower,
@@ -3106,7 +3973,7 @@ function App() {
     }))
   }
 
-  const addBorrowerPrincipal = (borrowerId: string, amount: number) => {
+  const addBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
@@ -3116,11 +3983,35 @@ function App() {
         id: crypto.randomUUID(),
         type: 'principal-addition' as const,
         amount,
-        date: getLocalDate(),
+        date,
       }
       return {
         ...borrower,
         loanAmount: updatedLoanAmount,
+        transactions: [...(borrower.transactions ?? []), nextTransaction],
+      }
+    }))
+  }
+
+  const editBorrowerPrincipal = (borrowerId: string, amount: number, reason: string, date: string) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0 || !reason.trim()) return
+    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
+      if (borrower.id !== borrowerId) return borrower
+      const previousAmount = Number(borrower.loanAmount.toFixed(2))
+      const newAmount = Number(amount.toFixed(2))
+      if (previousAmount === newAmount) return borrower
+      const nextTransaction = {
+        id: crypto.randomUUID(),
+        type: 'principal-adjustment' as const,
+        amount: Number((newAmount - previousAmount).toFixed(2)),
+        previousAmount,
+        newAmount,
+        reason: reason.trim(),
+        date,
+      }
+      return {
+        ...borrower,
+        loanAmount: newAmount,
         transactions: [...(borrower.transactions ?? []), nextTransaction],
       }
     }))
@@ -3133,6 +4024,9 @@ function App() {
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          monthlyNetProfit={monthlyNetProfit}
+          cashInTransactions={cashInTransactions}
+          cashOutTransactions={cashOutTransactions}
         />
       }
       if (activeTab === 'savings') {
@@ -3147,6 +4041,7 @@ function App() {
             onMemberChange={() => undefined}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onEditMemberSavings={editMemberSavings}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />
@@ -3168,6 +4063,7 @@ function App() {
             onMemberChange={setSelectedMember}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
+            onEditMemberSavings={editMemberSavings}
             onDeleteMember={deleteSavingsMember}
             onClearSavingsTransactions={clearSavingsTransactions}
           />
@@ -3183,6 +4079,7 @@ function App() {
             onPayBorrowerInterest={payBorrowerInterest}
             onPayBorrowerPrincipal={payBorrowerPrincipal}
             onAddBorrowerPrincipal={addBorrowerPrincipal}
+            onEditBorrowerPrincipal={editBorrowerPrincipal}
             onRemoveBorrower={removeBorrower}
             onClearLoans={clearLoanRecords}
             totalInterestPaid={totalInterestPaid}
@@ -3213,22 +4110,16 @@ function App() {
           />
         )
       case 'group-update':
-        return (
-          <main className="page-view">
-            <section className="page-header">
-              <div>
-                <p className="eyebrow">Group</p>
-                <h2>Group Update</h2>
-              </div>
-            </section>
-          </main>
-        )
+        return <GroupUpdatePage />
       case 'overview':
       default:
         return <OverviewPage
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          monthlyNetProfit={monthlyNetProfit}
+          cashInTransactions={cashInTransactions}
+          cashOutTransactions={cashOutTransactions}
         />
     }
   }
