@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:installer": "npm run build && electron-builder --win nsis",
+    "build:portable": "npm run build && electron-builder --win portable",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -44,7 +45,10 @@
       "electron/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "oneClick": false,
