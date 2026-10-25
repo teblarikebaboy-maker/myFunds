@@ -3151,6 +3151,73 @@ p {
   background: rgba(2, 6, 23, 0.48);
 }
 
+.profits-encoder-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.profits-encoder-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.profits-encoder-fields label {
+  display: grid;
+  gap: 5px;
+  color: #a5b4c7;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.profits-encoder-fields label:first-child {
+  width: 180px;
+}
+
+.profits-encoder-fields label:last-child {
+  width: 118px;
+}
+
+.profits-encoder-fields select,
+.profits-encoder-fields input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.48);
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.profits-encoder-total {
+  align-self: center;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.profits-encoder-controls .member-profit-deduct-button {
+  min-height: 36px;
+  padding-block: 0.45rem;
+}
+
+.profits-encoder-note {
+  flex-basis: 100%;
+  color: #a5b4c7;
+  font-size: 0.78rem;
+}
+
 .profits-payouts-section .panel-header {
   align-items: flex-start;
 }
@@ -3255,6 +3322,24 @@ p {
 
 .app-shell[data-theme='light'] .profits-member-card .member-profit-deduct-button:not(:disabled):hover {
   background: #ccfbf1;
+}
+
+.app-shell[data-theme='light'] .profits-encoder-controls {
+  border-color: rgba(13, 148, 136, 0.2);
+  background: #f8fafc;
+}
+
+.app-shell[data-theme='light'] .profits-encoder-fields label,
+.app-shell[data-theme='light'] .profits-encoder-total,
+.app-shell[data-theme='light'] .profits-encoder-note {
+  color: #475569;
+}
+
+.app-shell[data-theme='light'] .profits-encoder-fields select,
+.app-shell[data-theme='light'] .profits-encoder-fields input {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: #fff;
+  color: #1e293b;
 }
 
 .app-shell[data-theme='light'] .profits-section {

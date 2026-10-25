@@ -2375,15 +2375,15 @@ function ProfitsPage({
   isAdmin: boolean
   onAddOtherProfit: (profit: OtherProfit) => void
   onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty', memberProfit: number) => void
-  onSendToEncoder: (memberName: string, encoderName: string, amount: number) => void
+  onSendToEncoder: (encoderName: string, payments: Array<{ memberName: string; amount: number }>) => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
   onClearProfitTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }) {
-  const [profitDateFrom, setProfitDateFrom] = useState(`${currentYear}-01-01`)
+  const [profitDateFrom, setProfitDateFrom] = useState('')
   const [profitDateTo, setProfitDateTo] = useState(getLocalDate)
   const [selectedProfitTransferDate, setSelectedProfitTransferDate] = useState('')
   const [isTransferFormOpen, setIsTransferFormOpen] = useState(false)
-  const [transferDateFrom, setTransferDateFrom] = useState(`${currentYear}-01-01`)
+  const [transferDateFrom, setTransferDateFrom] = useState('')
   const [transferDateTo, setTransferDateTo] = useState(getLocalDate)
   const [paymentSearch, setPaymentSearch] = useState('')
   const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
@@ -2391,7 +2391,8 @@ function ProfitsPage({
   const [clearConfirmationText, setClearConfirmationText] = useState('')
   const [clearProfitError, setClearProfitError] = useState('')
   const [isClearingProfit, setIsClearingProfit] = useState(false)
-  const [encoderSelections, setEncoderSelections] = useState<Record<string, string>>({})
+  const [selectedEncoder, setSelectedEncoder] = useState('')
+  const [encoderPercentage, setEncoderPercentage] = useState('5')
   const [otherProfitAmount, setOtherProfitAmount] = useState('')
   const [otherProfitSource, setOtherProfitSource] = useState('')
   const [otherProfitDate, setOtherProfitDate] = useState(getLocalDate)
@@ -2409,7 +2410,9 @@ function ProfitsPage({
   const activeProfitTransferDate = profitTransferDates.includes(selectedProfitTransferDate)
     ? selectedProfitTransferDate
     : profitTransferDates[0] ?? ''
-  const selectedProfitTransfers = profitTransfers.filter((transfer) => transfer.date === activeProfitTransferDate)
+  const selectedProfitTransferTotal = profitTransfers
+    .filter((transfer) => transfer.date === activeProfitTransferDate)
+    .reduce((total, transfer) => total + transfer.amount, 0)
   const profitBalance = Number(Math.max(0, totalInterestPaid + otherProfitTotal - profitTransferred).toFixed(2))
   const profitSources = [
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
@@ -2443,14 +2446,16 @@ function ProfitsPage({
     )
   }))
   const availableTransferPayments = profitSources.filter((payment) =>
-    payment.date >= transferDateFrom && payment.date <= transferDateTo,
+    (!transferDateFrom || payment.date >= transferDateFrom)
+    && (!transferDateTo || payment.date <= transferDateTo),
   ).map((payment) => ({
     ...payment,
     availableAmount: Number(Math.max(0, payment.amount - (transferredByPayment.get(payment.id) ?? 0)).toFixed(2)),
   })).filter((payment) => payment.availableAmount > 0)
   const availableTransferTotal = availableTransferPayments.reduce((total, payment) => total + payment.availableAmount, 0)
   const filteredProfitSources = profitSources.filter((payment) =>
-    payment.date >= profitDateFrom && payment.date <= profitDateTo,
+    (!profitDateFrom || payment.date >= profitDateFrom)
+    && (!profitDateTo || payment.date <= profitDateTo),
   )
   const searchedProfitSources = filteredProfitSources.filter((payment) =>
     payment.borrowerName.toLowerCase().includes(paymentSearch.trim().toLowerCase()),
@@ -2576,6 +2581,34 @@ function ProfitsPage({
     const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions - encoderDeductions).toFixed(2))
     return { member, sharePercentage, profitShare }
   })
+  const encoderRate = Number(encoderPercentage)
+  const encoderPayments = memberProfits.map(({ member, profitShare }) => ({
+    memberName: member.name,
+    amount: Number((profitShare * encoderRate / 100).toFixed(2)),
+  })).filter((payment) => payment.amount > 0)
+  const encoderTotal = Number(encoderPayments.reduce((total, payment) => total + payment.amount, 0).toFixed(2))
+  const encoderPaymentSent = profitCashouts.some((cashout) =>
+    cashout.action === 'encoder' && cashout.transferTotal === distributedProfitTotal,
+  )
+  const sentEncoderTotal = Number(profitCashouts
+    .filter((cashout) => cashout.action === 'encoder' && cashout.transferTotal === distributedProfitTotal)
+    .reduce((total, cashout) => total + cashout.amount, 0)
+    .toFixed(2))
+  const memberProfitAlreadyPaid = profitCashouts.some((cashout) =>
+    cashout.transferTotal === distributedProfitTotal
+    && cashout.action !== 'encoder'
+    && cashout.action !== 'penalty',
+  )
+  const canSendToEncoder = isAdmin
+    && groupEncoderNames.length > 0
+    && Boolean(selectedEncoder)
+    && Number.isFinite(encoderRate)
+    && encoderRate > 0
+    && encoderRate <= 100
+    && encoderTotal > 0
+    && distributedProfitTotal > 0
+    && !encoderPaymentSent
+    && !memberProfitAlreadyPaid
   const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'get profit'>>({})
   const [memberPenaltyAmounts, setMemberPenaltyAmounts] = useState<Record<string, string>>({})
 
@@ -2648,11 +2681,9 @@ function ProfitsPage({
                           ))}
                         </select>
                         <ul className="profit-transfer-history">
-                          {selectedProfitTransfers.map((transfer, index) => (
-                            <li key={`${transfer.date}-${index}`}>
-                              <strong>{formatCurrency(transfer.amount)}</strong>
-                            </li>
-                          ))}
+                          <li>
+                            <strong>{formatCurrency(selectedProfitTransferTotal)}</strong>
+                          </li>
                         </ul>
                       </>
                     ) : (
@@ -2858,19 +2889,62 @@ function ProfitsPage({
             <h3>Members Profit</h3>
           </div>
         </div>
+        {isAdmin && (
+          <div className="profits-encoder-controls">
+            <div className="profits-encoder-fields">
+              <label>
+                Encoder
+                <select
+                  value={selectedEncoder}
+                  onChange={(event) => setSelectedEncoder(event.target.value)}
+                  disabled={groupEncoderNames.length === 0}
+                >
+                  <option value="">Select encoder</option>
+                  {groupEncoderNames.map((encoderName) => (
+                    <option key={encoderName} value={encoderName}>{encoderName}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Encoder percentage (%)
+                <input
+                  type="number"
+                  aria-label="Encoder percentage"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={encoderPercentage}
+                  onChange={(event) => setEncoderPercentage(event.target.value)}
+                />
+              </label>
+            </div>
+            <small className="profits-encoder-total">
+              {encoderPaymentSent
+                ? `Sent: ${formatCurrency(sentEncoderTotal)}`
+                : `Total: ${formatCurrency(encoderTotal)}`}
+            </small>
+            <button
+              type="button"
+              className="secondary-button member-profit-deduct-button"
+              disabled={!canSendToEncoder}
+              onClick={() => onSendToEncoder(selectedEncoder, encoderPayments)}
+            >
+              {encoderPaymentSent ? 'Sent to encoder' : 'Send to encoder'}
+            </button>
+            {groupEncoderNames.length === 0 && (
+              <small className="profits-encoder-note">Add an encoder in Group Updates first.</small>
+            )}
+            {memberProfitAlreadyPaid && !encoderPaymentSent && (
+              <small className="profits-encoder-note">Send the encoder payment before recording member payouts.</small>
+            )}
+          </div>
+        )}
         <div className="stats-grid profits-member-grid">
           {memberProfits.map(({ member, sharePercentage, profitShare }) => {
             const action = memberProfitActions[member.name] ?? 'add to savings'
             const penaltyAmountValue = memberPenaltyAmounts[member.name] ?? ''
             const penaltyAmount = Number(penaltyAmountValue)
             const memberSavings = getMemberSavings(member)
-            const encoderAmount = Number((profitShare * 0.05).toFixed(2))
-            const selectedEncoder = encoderSelections[member.name] ?? ''
-            const encoderPaymentSent = profitCashouts.some((cashout) =>
-              cashout.memberName === member.name
-              && cashout.action === 'encoder'
-              && cashout.transferTotal === distributedProfitTotal,
-            )
             return (
               <div key={member.name} className="stat-box member-profit-box profits-member-card">
                 <span>{member.name}</span>
@@ -2879,37 +2953,6 @@ function ProfitsPage({
                   {sharePercentage.toFixed(1)}% savings share
                 </small>
                 <div className="member-profit-actions">
-                  <div className="member-profit-primary-action">
-                    <label>
-                      Send 5% to encoder
-                      <select
-                        value={selectedEncoder}
-                        onChange={(event) => setEncoderSelections((current) => ({
-                          ...current,
-                          [member.name]: event.target.value,
-                        }))}
-                        disabled={groupEncoderNames.length === 0}
-                      >
-                        <option value="">Select encoder</option>
-                        {groupEncoderNames.map((encoderName) => (
-                          <option key={encoderName} value={encoderName}>{encoderName}</option>
-                        ))}
-                      </select>
-                    </label>
-                    {groupEncoderNames.length === 0 && (
-                      <small>Add an encoder in Group Updates first.</small>
-                    )}
-                    <small>Payment: {formatCurrency(encoderAmount)}</small>
-                    <button
-                      type="button"
-                      className="secondary-button member-profit-deduct-button"
-                      disabled={!isAdmin || distributedProfitTotal <= 0 || encoderAmount <= 0
-                        || !selectedEncoder || encoderPaymentSent}
-                      onClick={() => onSendToEncoder(member.name, selectedEncoder, encoderAmount)}
-                    >
-                      {encoderPaymentSent ? 'Sent to encoder' : 'Send to encoder'}
-                    </button>
-                  </div>
                   <div className="member-profit-primary-action">
                     <label>
                       Profit action
@@ -3063,10 +3106,10 @@ type GroupOperationCost = { id: string; description: string; amount: number; dat
 type GroupEncoderPayment = {
   id: string
   name: string
-  amount: number
+  amount?: number
   dateFrom: string
   dateTo: string
-  operationCostId: string
+  operationCostId?: string
 }
 type GroupUpdateData = {
   operationCosts: GroupOperationCost[]
@@ -3111,11 +3154,11 @@ const isGroupUpdateData = (
       && data.groupEncoders.every((encoder) =>
         typeof encoder.id === 'string'
         && typeof encoder.name === 'string'
-        && typeof encoder.amount === 'number'
-        && Number.isFinite(encoder.amount)
+        && (encoder.amount === undefined
+          || (typeof encoder.amount === 'number' && Number.isFinite(encoder.amount)))
         && typeof encoder.dateFrom === 'string'
         && typeof encoder.dateTo === 'string'
-        && typeof encoder.operationCostId === 'string',
+        && (encoder.operationCostId === undefined || typeof encoder.operationCostId === 'string'),
       )))
     && Array.isArray(data.boardOfDirectors)
     && data.boardOfDirectors.every((director) => typeof director === 'string')
@@ -3155,7 +3198,6 @@ function GroupUpdatePage() {
   const [costDate, setCostDate] = useState(getLocalDate)
   const [costError, setCostError] = useState('')
   const [encoderName, setEncoderName] = useState('')
-  const [encoderPaymentAmount, setEncoderPaymentAmount] = useState('')
   const [encoderDateFrom, setEncoderDateFrom] = useState(getLocalDate)
   const [encoderDateTo, setEncoderDateTo] = useState(getLocalDate)
   const [encoderError, setEncoderError] = useState('')
@@ -3221,13 +3263,8 @@ function GroupUpdatePage() {
 
   const handleAddGroupEncoder = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const amount = Number(encoderPaymentAmount)
     if (!encoderName.trim()) {
       setEncoderError('Enter an encoder name.')
-      return
-    }
-    if (encoderPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setEncoderError('Enter a payment amount greater than zero.')
       return
     }
     if (!encoderDateFrom || !encoderDateTo) {
@@ -3240,27 +3277,17 @@ function GroupUpdatePage() {
     }
 
     const encoderId = crypto.randomUUID()
-    const operationCostId = crypto.randomUUID()
     const name = encoderName.trim()
     updateData((current) => ({
       ...current,
       groupEncoders: [...current.groupEncoders, {
         id: encoderId,
         name,
-        amount,
         dateFrom: encoderDateFrom,
         dateTo: encoderDateTo,
-        operationCostId,
       }],
-      operationCosts: [{
-        id: operationCostId,
-        description: `Group Encoder payment: ${name} (${encoderDateFrom} to ${encoderDateTo})`,
-        amount,
-        date: encoderDateTo,
-      }, ...current.operationCosts],
     }))
     setEncoderName('')
-    setEncoderPaymentAmount('')
     setEncoderDateFrom(getLocalDate())
     setEncoderDateTo(getLocalDate())
     setEncoderError('')
@@ -3466,10 +3493,6 @@ function GroupUpdatePage() {
               Encoder name
               <input value={encoderName} onChange={(event) => setEncoderName(event.target.value)} placeholder="Enter a name" />
             </label>
-            <label>
-              Payment amount (PHP)
-              <input type="number" min="0" step="0.01" value={encoderPaymentAmount} onChange={(event) => setEncoderPaymentAmount(event.target.value)} placeholder="0.00" />
-            </label>
             <div className="group-update-inline-fields">
               <label>
                 From
@@ -3480,7 +3503,7 @@ function GroupUpdatePage() {
                 <input type="date" value={encoderDateTo} onChange={(event) => setEncoderDateTo(event.target.value)} />
               </label>
             </div>
-            <button type="submit" className="primary-button">Add encoder payment</button>
+            <button type="submit" className="primary-button">Add encoder</button>
             {encoderError && <p className="member-error" role="alert">{encoderError}</p>}
           </form>
           {data.groupEncoders.length > 0 ? (
@@ -3491,8 +3514,7 @@ function GroupUpdatePage() {
                     <strong>{encoder.name}</strong>
                     <small>{formatDate(encoder.dateFrom)} to {formatDate(encoder.dateTo)}</small>
                   </div>
-                  <span>{formatBorrowerCurrency(encoder.amount)}</span>
-                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove encoder payment for ${encoder.name}`} onClick={() => handleRemoveGroupEncoder(encoder)}>Remove</button>
+                  <button type="button" className="secondary-button group-update-remove" aria-label={`Remove encoder ${encoder.name}`} onClick={() => handleRemoveGroupEncoder(encoder)}>Remove</button>
                 </li>
               ))}
             </ul>
@@ -4384,25 +4406,27 @@ function App() {
     }])
   }
 
-  const sendProfitToEncoder = (memberName: string, encoderName: string, amount: number) => {
-    if (signedInRole !== 'admin' || !encoderName.trim() || !Number.isFinite(amount) || amount <= 0) return
+  const sendProfitToEncoder = (
+    encoderName: string,
+    payments: Array<{ memberName: string; amount: number }>,
+  ) => {
+    if (signedInRole !== 'admin' || !encoderName.trim() || payments.length === 0
+      || payments.some((payment) => !payment.memberName.trim()
+        || !Number.isFinite(payment.amount) || payment.amount <= 0)) return
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
     setProfitCashouts((currentCashouts) => {
-      if (currentCashouts.some((cashout) => cashout.memberName === memberName
-        && cashout.transferTotal === transferTotal
-        && cashout.action !== 'encoder'
+      if (currentCashouts.some((cashout) =>
+        cashout.transferTotal === transferTotal
         && cashout.action !== 'penalty')) return currentCashouts
-      if (currentCashouts.some((cashout) => cashout.memberName === memberName
-        && cashout.action === 'encoder'
-        && cashout.transferTotal === transferTotal)) return currentCashouts
-      return [...currentCashouts, {
+      const date = getLocalDate()
+      return [...currentCashouts, ...payments.map(({ memberName, amount }) => ({
         memberName,
         amount,
-        date: getLocalDate(),
-        action: 'encoder',
+        date,
+        action: 'encoder' as const,
         transferTotal,
         encoderName: encoderName.trim(),
-      }]
+      }))]
     })
   }
 
