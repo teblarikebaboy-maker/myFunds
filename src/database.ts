@@ -70,12 +70,19 @@ export type ProfitTransfer = {
   periodTo?: string
   paymentAllocations?: Array<{ transactionId: string; amount: number }>
 }
+export type OtherProfit = {
+  id: string
+  amount: number
+  source: string
+  date: string
+}
 export type ProfitCashout = {
   memberName: string
   amount: number
   date: string
-  action?: 'cashout' | 'added to savings' | 'penalty'
+  action?: 'cashout' | 'added to savings' | 'penalty' | 'encoder'
   transferTotal?: number
+  encoderName?: string
 }
 export type DeletedProfitTransaction = ProfitCashout & { deletedAt: string }
 
@@ -105,6 +112,7 @@ export type DatabaseDirectoryHandle = {
 
 const LOCAL_STORAGE_KEY = 'funds-organizer-members-v1'
 const LOCAL_PROFIT_CASHOUTS_KEY = 'funds-organizer-profit-cashouts-v1'
+const LOCAL_OTHER_PROFITS_KEY = 'funds-organizer-other-profits-v1'
 const LOCAL_DELETED_SAVINGS_TRANSACTIONS_KEY = 'funds-organizer-deleted-savings-transactions-v1'
 const LOCAL_DELETED_PROFIT_TRANSACTIONS_KEY = 'funds-organizer-deleted-profit-transactions-v1'
 const LOCAL_DELETED_LOANS_KEY = 'funds-organizer-deleted-loans-v1'
@@ -153,6 +161,33 @@ export const loadSavedProfitCashouts = (): ProfitCashout[] => {
 export const saveProfitCashoutsLocally = (cashouts: ProfitCashout[]) => {
   try {
     localStorage.setItem(LOCAL_PROFIT_CASHOUTS_KEY, JSON.stringify(cashouts))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedOtherProfits = (): OtherProfit[] => {
+  try {
+    const savedProfits = localStorage.getItem(LOCAL_OTHER_PROFITS_KEY)
+    if (!savedProfits) return []
+    const parsed: unknown = JSON.parse(savedProfits)
+    return Array.isArray(parsed)
+      ? parsed.filter((profit): profit is OtherProfit => Boolean(profit)
+        && typeof profit.id === 'string'
+        && typeof profit.amount === 'number'
+        && Number.isFinite(profit.amount)
+        && profit.amount > 0
+        && typeof profit.source === 'string'
+        && typeof profit.date === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
+export const saveOtherProfitsLocally = (profits: OtherProfit[]) => {
+  try {
+    localStorage.setItem(LOCAL_OTHER_PROFITS_KEY, JSON.stringify(profits))
   } catch {
     // Keep the application usable when browser storage is unavailable.
   }
@@ -345,7 +380,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; profitCashouts: ProfitCashout[]; deletedSavingsTransactions: DeletedSavingsTransaction[]; deletedProfitTransactions: DeletedProfitTransaction[]; deletedLoans: DeletedLoanRecord[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; otherProfits?: OtherProfit[]; profitCashouts: ProfitCashout[]; deletedSavingsTransactions: DeletedSavingsTransaction[]; deletedProfitTransactions: DeletedProfitTransaction[]; deletedLoans: DeletedLoanRecord[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -591,6 +626,25 @@ export const readWorkbookData = async (
     }
   })
 
+  const otherProfits: OtherProfit[] = []
+  const otherProfitsSheet = workbook.getWorksheet('Other Profits')
+  const otherProfitHeaders = new Map<string, number>()
+  otherProfitsSheet?.getRow(1).eachCell((cell, columnNumber) => {
+    otherProfitHeaders.set(String(cell.value ?? '').trim(), columnNumber)
+  })
+  otherProfitsSheet?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const getCell = (header: string, fallbackColumn: number) =>
+      row.getCell(otherProfitHeaders.get(header) ?? fallbackColumn).value
+    const id = String(getCell('ID', 1) ?? '').trim()
+    const amount = Number(getCell('Amount (PHP)', 2))
+    const source = String(getCell('Source', 3) ?? '').trim()
+    const date = getCellDate(getCell('Date', 4))
+    if (id && Number.isFinite(amount) && amount > 0 && source && date) {
+      otherProfits.push({ id, amount, source, date })
+    }
+  })
+
   const profitCashouts: ProfitCashout[] = []
   workbook.getWorksheet('Profit Cashouts')?.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return
@@ -598,7 +652,9 @@ export const readWorkbookData = async (
     const amount = getCellNumber(row.getCell(2).value, `${memberName || 'Unknown member'}, profit cashout`)
     const date = getCellDate(row.getCell(3).value)
     const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
-    const action = actionValue === 'added to savings' || actionValue === 'penalty' ? actionValue : 'cashout'
+    const action = actionValue === 'added to savings' || actionValue === 'penalty' || actionValue === 'encoder'
+      ? actionValue
+      : 'cashout'
     const transferTotalCell = row.getCell(5).value
     const transferTotalValue = transferTotalCell === null || transferTotalCell === undefined || transferTotalCell === ''
       ? Number.NaN
@@ -606,8 +662,9 @@ export const readWorkbookData = async (
     const transferTotal = Number.isFinite(transferTotalValue) && transferTotalValue >= 0
       ? transferTotalValue
       : undefined
+    const encoderName = String(row.getCell(6).value ?? '').trim() || undefined
     if (memberName && Number.isFinite(amount) && amount > 0 && date) {
-      profitCashouts.push({ memberName, amount, date, action, transferTotal })
+      profitCashouts.push({ memberName, amount, date, action, transferTotal, encoderName })
     }
   })
 
@@ -645,12 +702,15 @@ export const readWorkbookData = async (
     const amount = Number(row.getCell(2).value)
     const date = getCellDate(row.getCell(3).value)
     const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
-    const action = actionValue === 'added to savings' || actionValue === 'penalty' ? actionValue : 'cashout'
+    const action = actionValue === 'added to savings' || actionValue === 'penalty' || actionValue === 'encoder'
+      ? actionValue
+      : 'cashout'
     const transferTotalValue = Number(row.getCell(5).value)
     const transferTotal = Number.isFinite(transferTotalValue) && transferTotalValue >= 0 ? transferTotalValue : undefined
     const deletedAt = getCellDate(row.getCell(6).value)
+    const encoderName = String(row.getCell(7).value ?? '').trim() || undefined
     if (memberName && Number.isFinite(amount) && amount > 0 && date && deletedAt) {
-      deletedProfitTransactions.push({ memberName, amount, date, action, transferTotal, deletedAt })
+      deletedProfitTransactions.push({ memberName, amount, date, action, transferTotal, encoderName, deletedAt })
     }
   })
 
@@ -698,7 +758,7 @@ export const readWorkbookData = async (
     })
   })
 
-  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans }
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, otherProfits: otherProfitsSheet ? otherProfits : undefined, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans }
 }
 
 export const writeWorkbookData = async (
@@ -712,6 +772,7 @@ export const writeWorkbookData = async (
   deletedSavingsTransactions: DeletedSavingsTransaction[] = [],
   deletedProfitTransactions: DeletedProfitTransaction[] = [],
   deletedLoans: DeletedLoanRecord[] = [],
+  otherProfits: OtherProfit[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -863,14 +924,24 @@ export const writeWorkbookData = async (
     JSON.stringify(transfer.paymentAllocations ?? []),
   ]))
 
+  const otherProfitsSheet = workbook.addWorksheet('Other Profits')
+  otherProfitsSheet.addRow(['ID', 'Amount (PHP)', 'Source', 'Date'])
+  otherProfits.forEach((profit) => otherProfitsSheet.addRow([
+    profit.id,
+    profit.amount,
+    profit.source,
+    profit.date,
+  ]))
+
   const profitCashoutsSheet = workbook.addWorksheet('Profit Cashouts')
-  profitCashoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)'])
+  profitCashoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Encoder'])
   profitCashouts.forEach((cashout) => profitCashoutsSheet.addRow([
     cashout.memberName,
     cashout.amount,
     cashout.date,
     cashout.action ?? 'cashout',
     cashout.transferTotal ?? '',
+    cashout.encoderName ?? '',
   ]))
 
   const deletedSavingsSheet = workbook.addWorksheet('Deleted Savings Transactions')
@@ -916,6 +987,7 @@ export const writeWorkbookData = async (
       { name: 'Action' },
       { name: 'Transfer Total (PHP)' },
       { name: 'Deleted At' },
+      { name: 'Encoder' },
     ],
     rows: deletedProfitTransactions.map((transaction) => [
       transaction.memberName,
@@ -924,6 +996,7 @@ export const writeWorkbookData = async (
       transaction.action ?? 'cashout',
       transaction.transferTotal ?? '',
       transaction.deletedAt,
+      transaction.encoderName ?? '',
     ]),
   })
 

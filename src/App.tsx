@@ -8,6 +8,7 @@ import {
   loadSavedDeletedLoans,
   loadSavedDeletedSavingsTransactions,
   loadSavedMembers,
+  loadSavedOtherProfits,
   loadSavedProfitCashouts,
   readWorkbookData,
   saveDirectory,
@@ -15,6 +16,7 @@ import {
   saveDeletedLoansLocally,
   saveDeletedSavingsTransactionsLocally,
   saveMembersLocally,
+  saveOtherProfitsLocally,
   saveProfitCashoutsLocally,
   supportsDatabaseFolder,
   verifyPassword,
@@ -27,6 +29,7 @@ import {
   type DeletedProfitTransaction,
   type DeletedSavingsTransaction,
   type Member,
+  type OtherProfit,
   type ProfitCashout,
   type ProfitTransfer,
   type RemovedBorrowerTransaction,
@@ -48,7 +51,6 @@ type SavingsTransaction = {
   previousAmount?: number
   newAmount?: number
 }
-
 const getSavingsAdjustmentTotal = (member: Member) =>
   (member.adjustments ?? []).reduce(
     (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
@@ -225,7 +227,15 @@ const getOverviewCashInTransactions = (
   members: Member[],
   borrowers: Borrower[],
   removedTransactions: RemovedBorrowerTransaction[],
+  otherProfits: OtherProfit[],
 ): OverviewCashInTransaction[] => [
+  ...otherProfits.map((profit) => ({
+    id: `other-profit-${profit.id}`,
+    name: profit.source,
+    type: 'Other profit',
+    amount: profit.amount,
+    date: profit.date,
+  })),
   ...members.flatMap((member) => member.contributions.map((contribution, index) => ({
     id: `savings-${member.name}-${contribution.date}-${index}`,
     name: member.name,
@@ -351,6 +361,7 @@ const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 const getMonthlyNetProfit = (
   borrowers: Borrower[],
   removedTransactions: RemovedBorrowerTransaction[],
+  otherProfits: OtherProfit[],
   year: number,
 ) => {
   const monthlyTotals = Array.from({ length: 12 }, () => 0)
@@ -365,6 +376,12 @@ const getMonthlyNetProfit = (
     if (month >= 0 && month < monthlyTotals.length) monthlyTotals[month] += transaction.amount
   })
 
+  otherProfits.forEach((profit) => {
+    if (!profit.date.startsWith(`${year}-`)) return
+    const month = Number(profit.date.slice(5, 7)) - 1
+    if (month >= 0 && month < monthlyTotals.length) monthlyTotals[month] += profit.amount
+  })
+
   return monthLabels.map((month, index) => ({ month, value: monthlyTotals[index] }))
 }
 
@@ -372,6 +389,7 @@ function OverviewPage({
   totalSavings,
   totalLoanProceeds,
   totalInterestPaid,
+  totalOtherProfit,
   monthlyNetProfit,
   cashInTransactions,
   cashOutTransactions,
@@ -379,6 +397,7 @@ function OverviewPage({
   totalSavings: number
   totalLoanProceeds: number
   totalInterestPaid: number
+  totalOtherProfit: number
   monthlyNetProfit: Array<{ month: string; value: number }>
   cashInTransactions: OverviewCashInTransaction[]
   cashOutTransactions: OverviewCashOutTransaction[]
@@ -417,7 +436,7 @@ function OverviewPage({
                   : card.label === 'Loans Proceeds'
                     ? formatCurrency(totalLoanProceeds)
                     : card.label === 'Total Profits'
-                      ? formatCurrency(totalInterestPaid)
+                      ? formatCurrency(totalInterestPaid + totalOtherProfit)
                       : card.value}
             </h2>
             <span className={card.tone}>{card.delta}</span>
@@ -2332,12 +2351,15 @@ function ProfitsPage({
   borrowers,
   removedBorrowerTransactions,
   profitTransfers,
+  otherProfits,
   profitCashouts,
   totalInterestPaid,
   totalReceivableInterest,
   totalGroupAllowance,
   isAdmin,
+  onAddOtherProfit,
   onApplyMemberProfitAction,
+  onSendToEncoder,
   onTransferProfit,
   onClearProfitTransactions,
 }: {
@@ -2345,12 +2367,15 @@ function ProfitsPage({
   borrowers: Borrower[]
   removedBorrowerTransactions: RemovedBorrowerTransaction[]
   profitTransfers: ProfitTransfer[]
+  otherProfits: OtherProfit[]
   profitCashouts: ProfitCashout[]
   totalInterestPaid: number
   totalReceivableInterest: number
   totalGroupAllowance: number
   isAdmin: boolean
+  onAddOtherProfit: (profit: OtherProfit) => void
   onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty', memberProfit: number) => void
+  onSendToEncoder: (memberName: string, encoderName: string, amount: number) => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
   onClearProfitTransactions: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
 }) {
@@ -2366,17 +2391,27 @@ function ProfitsPage({
   const [clearConfirmationText, setClearConfirmationText] = useState('')
   const [clearProfitError, setClearProfitError] = useState('')
   const [isClearingProfit, setIsClearingProfit] = useState(false)
+  const [encoderSelections, setEncoderSelections] = useState<Record<string, string>>({})
+  const [otherProfitAmount, setOtherProfitAmount] = useState('')
+  const [otherProfitSource, setOtherProfitSource] = useState('')
+  const [otherProfitDate, setOtherProfitDate] = useState(getLocalDate)
+  const [otherProfitError, setOtherProfitError] = useState('')
+  const [groupEncoderNames] = useState(() => [...new Set(
+    loadGroupUpdateData().data.groupEncoders.map((encoder) => encoder.name.trim()).filter(Boolean),
+  )])
   const [groupOperationCosts] = useState(() => loadGroupUpdateData().data.operationCosts)
   const totalGroupOperationCost = groupOperationCosts.reduce((total, cost) => total + cost.amount, 0)
-  const profitTransferred = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
+  const profitTransferred = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
+  const otherProfitTotal = Number(otherProfits.reduce((total, profit) => total + profit.amount, 0).toFixed(2))
+  const distributedProfitTotal = profitTransferred
   const profitTransferDates = [...new Set(profitTransfers.map((transfer) => transfer.date))]
     .sort((first, second) => second.localeCompare(first))
   const activeProfitTransferDate = profitTransferDates.includes(selectedProfitTransferDate)
     ? selectedProfitTransferDate
     : profitTransferDates[0] ?? ''
   const selectedProfitTransfers = profitTransfers.filter((transfer) => transfer.date === activeProfitTransferDate)
-  const profitBalance = Number(Math.max(0, totalInterestPaid - profitTransferred).toFixed(2))
-  const interestPayments = [
+  const profitBalance = Number(Math.max(0, totalInterestPaid + otherProfitTotal - profitTransferred).toFixed(2))
+  const profitSources = [
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
       .filter((transaction) => transaction.type === 'interest-payment')
       .map((transaction) => ({
@@ -2393,6 +2428,12 @@ function ProfitsPage({
         amount: transaction.amount,
         date: transaction.date,
       })),
+    ...otherProfits.map((profit) => ({
+      id: `other-profit-${profit.id}`,
+      borrowerName: profit.source,
+      amount: profit.amount,
+      date: profit.date,
+    })),
   ].sort((first, second) => second.date.localeCompare(first.date))
   const transferredByPayment = new Map<string, number>()
   profitTransfers.forEach((transfer) => transfer.paymentAllocations?.forEach((allocation) => {
@@ -2401,17 +2442,17 @@ function ProfitsPage({
       (transferredByPayment.get(allocation.transactionId) ?? 0) + allocation.amount,
     )
   }))
-  const availableTransferPayments = interestPayments.filter((payment) =>
+  const availableTransferPayments = profitSources.filter((payment) =>
     payment.date >= transferDateFrom && payment.date <= transferDateTo,
   ).map((payment) => ({
     ...payment,
     availableAmount: Number(Math.max(0, payment.amount - (transferredByPayment.get(payment.id) ?? 0)).toFixed(2)),
   })).filter((payment) => payment.availableAmount > 0)
   const availableTransferTotal = availableTransferPayments.reduce((total, payment) => total + payment.availableAmount, 0)
-  const filteredInterestPayments = interestPayments.filter((payment) =>
+  const filteredProfitSources = profitSources.filter((payment) =>
     payment.date >= profitDateFrom && payment.date <= profitDateTo,
   )
-  const searchedInterestPayments = filteredInterestPayments.filter((payment) =>
+  const searchedProfitSources = filteredProfitSources.filter((payment) =>
     payment.borrowerName.toLowerCase().includes(paymentSearch.trim().toLowerCase()),
   )
   const handleClearProfitTransactions = async (event: FormEvent<HTMLFormElement>) => {
@@ -2438,9 +2479,41 @@ function ProfitsPage({
       setIsClearingProfit(false)
     }
   }
-  const selectedInterestTotal = filteredInterestPayments.reduce((total, payment) => total + payment.amount, 0)
+  const handleAddOtherProfit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const amount = Number(otherProfitAmount)
+    const roundedAmount = Number(amount.toFixed(2))
+    if (!otherProfitSource.trim()) {
+      setOtherProfitError('Enter where this profit came from.')
+      return
+    }
+    if (otherProfitAmount === '' || !Number.isFinite(amount) || roundedAmount <= 0) {
+      setOtherProfitError('Enter an amount greater than zero.')
+      return
+    }
+    if (!otherProfitDate) {
+      setOtherProfitError('Choose the date this profit came from.')
+      return
+    }
+    onAddOtherProfit({
+      id: crypto.randomUUID(),
+      amount: roundedAmount,
+      source: otherProfitSource.trim(),
+      date: otherProfitDate,
+    })
+    setOtherProfitAmount('')
+    setOtherProfitSource('')
+    setOtherProfitDate(getLocalDate())
+    setOtherProfitError('')
+  }
+  const selectedInterestTotal = filteredProfitSources
+    .filter((payment) => !payment.id.startsWith('other-profit-'))
+    .reduce((total, payment) => total + payment.amount, 0)
+  const selectedOtherProfitTotal = otherProfits
+    .filter((profit) => profit.date >= profitDateFrom && profit.date <= profitDateTo)
+    .reduce((total, profit) => total + profit.amount, 0)
   const profitsData = [
-    { label: 'Net profit', value: formatCurrency(selectedInterestTotal), tone: 'positive' },
+    { label: 'Net profit', value: formatCurrency(selectedInterestTotal + selectedOtherProfitTotal), tone: 'positive' },
     { label: 'Total receivable', value: formatCurrency(totalReceivableInterest), tone: 'positive' },
     { label: 'Group allowance', value: formatCurrency(totalGroupAllowance), tone: 'positive' },
     { label: 'Group operating cost', value: formatCurrency(totalGroupOperationCost), tone: 'negative' },
@@ -2448,12 +2521,26 @@ function ProfitsPage({
   const totalSavings = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
   const settledTransfersByMember = new Map<string, number>()
   const legacyCashoutsByMember = new Map<string, number>()
+  const encoderDeductionsByMember = new Map<string, number>()
   profitCashouts.forEach((cashout) => {
-    if (cashout.action !== 'penalty' && cashout.transferTotal !== undefined) {
+    if (cashout.action !== 'penalty' && cashout.action !== 'encoder' && cashout.transferTotal !== undefined) {
       settledTransfersByMember.set(
         cashout.memberName,
         Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
       )
+    }
+  })
+  profitCashouts.forEach((cashout) => {
+    if (cashout.action === 'encoder') {
+      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
+      if (cashout.transferTotal === undefined
+        ? settledTransfers === undefined
+        : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
+        encoderDeductionsByMember.set(
+          cashout.memberName,
+          (encoderDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+        )
+      }
     }
   })
   const penaltyDeductionsByMember = new Map<string, number>()
@@ -2466,7 +2553,9 @@ function ProfitsPage({
           (penaltyDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
         )
       }
-    } else if (cashout.transferTotal === undefined && cashout.action !== 'added to savings') {
+    } else if (cashout.transferTotal === undefined
+      && cashout.action !== 'added to savings'
+      && cashout.action !== 'encoder') {
       legacyCashoutsByMember.set(
         cashout.memberName,
         (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
@@ -2478,12 +2567,13 @@ function ProfitsPage({
     const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
     const settledTransfers = settledTransfersByMember.get(member.name)
     const eligibleTransfers = settledTransfers === undefined
-      ? profitTransferred
-      : Math.max(0, profitTransferred - settledTransfers)
-    const grossProfitShare = profitTransferred > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
+      ? distributedProfitTotal
+      : Math.max(0, distributedProfitTotal - settledTransfers)
+    const grossProfitShare = distributedProfitTotal > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
     const legacyCashouts = settledTransfers === undefined ? legacyCashoutsByMember.get(member.name) ?? 0 : 0
     const penaltyDeductions = penaltyDeductionsByMember.get(member.name) ?? 0
-    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions).toFixed(2))
+    const encoderDeductions = encoderDeductionsByMember.get(member.name) ?? 0
+    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions - encoderDeductions).toFixed(2))
     return { member, sharePercentage, profitShare }
   })
   const [memberProfitActions, setMemberProfitActions] = useState<Record<string, 'add to savings' | 'get profit'>>({})
@@ -2584,7 +2674,7 @@ function ProfitsPage({
                 </div>
                 {isTransferFormOpen && (
                   <div className="profit-transfer-form">
-                    <p>Transfer available interest received between these dates.</p>
+                    <p>Transfer available interest and other profits received between these dates.</p>
                     <div className="profit-period-controls">
                       <label className="profit-period-date">
                         From
@@ -2645,24 +2735,80 @@ function ProfitsPage({
         ))}
       </section>
 
+      <section className="panel full-width-panel profits-section profits-other-section">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Additional income</p>
+            <h3>Other profits</h3>
+          </div>
+          <strong>{formatCurrency(otherProfitTotal)}</strong>
+        </div>
+        {isAdmin && (
+          <form className="group-update-form" noValidate onSubmit={handleAddOtherProfit}>
+            <label>
+              Amount (PHP)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={otherProfitAmount}
+                onChange={(event) => setOtherProfitAmount(event.target.value)}
+                placeholder="0.00"
+              />
+            </label>
+            <label>
+              Source
+              <input
+                value={otherProfitSource}
+                onChange={(event) => setOtherProfitSource(event.target.value)}
+                placeholder="Where did it come from?"
+              />
+            </label>
+            <label>
+              Date received
+              <input
+                type="date"
+                value={otherProfitDate}
+                onChange={(event) => setOtherProfitDate(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary-button">Add profit</button>
+            {otherProfitError && <p className="member-error" role="alert">{otherProfitError}</p>}
+          </form>
+        )}
+        {otherProfits.length > 0 ? (
+          <ul className="profit-interest-list">
+            {[...otherProfits].sort((first, second) => second.date.localeCompare(first.date)).map((profit) => (
+              <li key={profit.id}>
+                <span>{profit.source}</span>
+                <strong className="positive">+{formatCurrency(profit.amount)}</strong>
+                <time dateTime={profit.date}>{formatDate(profit.date)}</time>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="savings-history-empty">No other profits recorded.</p>
+        )}
+      </section>
+
       <section className="panel full-width-panel profits-section profits-received-section">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Received payments</p>
-            <h3>Interest received</h3>
+            <h3>Interest and other profits received</h3>
           </div>
           <input
             className="borrower-search profits-payment-search"
             type="search"
-            aria-label="Search received interest payments by borrower"
-            placeholder="Search borrower"
+            aria-label="Search received profit sources"
+            placeholder="Search source"
             value={paymentSearch}
             onChange={(event) => setPaymentSearch(event.target.value)}
           />
         </div>
-        {searchedInterestPayments.length > 0 ? (
+        {searchedProfitSources.length > 0 ? (
           <ul className="profit-interest-list">
-            {searchedInterestPayments.map((payment) => (
+            {searchedProfitSources.map((payment) => (
               <li key={payment.id}>
                 <span>{payment.borrowerName}</span>
                 <strong>{formatCurrency(payment.amount)}</strong>
@@ -2672,9 +2818,9 @@ function ProfitsPage({
           </ul>
         ) : (
           <p className="savings-history-empty">
-            {filteredInterestPayments.length > 0
-              ? 'No received payments match your search.'
-              : 'No interest payments received for the selected period.'}
+            {filteredProfitSources.length > 0
+              ? 'No received profit sources match your search.'
+              : 'No interest or other profits received for the selected period.'}
           </p>
         )}
       </section>
@@ -2718,6 +2864,13 @@ function ProfitsPage({
             const penaltyAmountValue = memberPenaltyAmounts[member.name] ?? ''
             const penaltyAmount = Number(penaltyAmountValue)
             const memberSavings = getMemberSavings(member)
+            const encoderAmount = Number((profitShare * 0.05).toFixed(2))
+            const selectedEncoder = encoderSelections[member.name] ?? ''
+            const encoderPaymentSent = profitCashouts.some((cashout) =>
+              cashout.memberName === member.name
+              && cashout.action === 'encoder'
+              && cashout.transferTotal === distributedProfitTotal,
+            )
             return (
               <div key={member.name} className="stat-box member-profit-box profits-member-card">
                 <span>{member.name}</span>
@@ -2726,6 +2879,37 @@ function ProfitsPage({
                   {sharePercentage.toFixed(1)}% savings share
                 </small>
                 <div className="member-profit-actions">
+                  <div className="member-profit-primary-action">
+                    <label>
+                      Send 5% to encoder
+                      <select
+                        value={selectedEncoder}
+                        onChange={(event) => setEncoderSelections((current) => ({
+                          ...current,
+                          [member.name]: event.target.value,
+                        }))}
+                        disabled={groupEncoderNames.length === 0}
+                      >
+                        <option value="">Select encoder</option>
+                        {groupEncoderNames.map((encoderName) => (
+                          <option key={encoderName} value={encoderName}>{encoderName}</option>
+                        ))}
+                      </select>
+                    </label>
+                    {groupEncoderNames.length === 0 && (
+                      <small>Add an encoder in Group Updates first.</small>
+                    )}
+                    <small>Payment: {formatCurrency(encoderAmount)}</small>
+                    <button
+                      type="button"
+                      className="secondary-button member-profit-deduct-button"
+                      disabled={!isAdmin || distributedProfitTotal <= 0 || encoderAmount <= 0
+                        || !selectedEncoder || encoderPaymentSent}
+                      onClick={() => onSendToEncoder(member.name, selectedEncoder, encoderAmount)}
+                    >
+                      {encoderPaymentSent ? 'Sent to encoder' : 'Send to encoder'}
+                    </button>
+                  </div>
                   <div className="member-profit-primary-action">
                     <label>
                       Profit action
@@ -2853,7 +3037,13 @@ function ProfitsPage({
           <ul className="profit-interest-list">
             {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
               <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
-                <span>{cashout.memberName} · {cashout.action === 'added to savings' ? 'Added to savings' : cashout.action === 'penalty' ? 'Penalty to group allowance' : 'Cashout'}</span>
+                <span>{cashout.memberName} · {cashout.action === 'added to savings'
+                  ? 'Added to savings'
+                  : cashout.action === 'penalty'
+                    ? 'Penalty to group allowance'
+                    : cashout.action === 'encoder'
+                      ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
+                      : 'Cashout'}</span>
                 <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
                   {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
                 </strong>
@@ -3702,6 +3892,7 @@ function App() {
   const [borrowers, setBorrowers] = useState<Borrower[]>([])
   const [removedBorrowerTransactions, setRemovedBorrowerTransactions] = useState<RemovedBorrowerTransaction[]>([])
   const [profitTransfers, setProfitTransfers] = useState<ProfitTransfer[]>([])
+  const [otherProfits, setOtherProfits] = useState<OtherProfit[]>(loadSavedOtherProfits)
   const [profitCashouts, setProfitCashouts] = useState<ProfitCashout[]>(loadSavedProfitCashouts)
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
@@ -3719,18 +3910,20 @@ function App() {
   const initialBorrowers = useRef(borrowers)
   const initialRemovedBorrowerTransactions = useRef(removedBorrowerTransactions)
   const initialProfitTransfers = useRef(profitTransfers)
+  const initialOtherProfits = useRef(otherProfits)
   const initialProfitCashouts = useRef(profitCashouts)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
-  const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, currentYear)
+  const totalOtherProfit = otherProfits.reduce((total, profit) => total + profit.amount, 0)
+  const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, currentYear)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
     (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
     0,
   ), 0)
   const cashOutTransactions = getOverviewCashOutTransactions(members, borrowers, profitCashouts)
-  const cashInTransactions = getOverviewCashInTransactions(members, borrowers, removedBorrowerTransactions)
+  const cashInTransactions = getOverviewCashInTransactions(members, borrowers, removedBorrowerTransactions, otherProfits)
   const registeredGuarantors = accounts
     .flatMap((account) => {
       const email = account.email.trim().toLowerCase()
@@ -3782,6 +3975,7 @@ function App() {
           setBorrowers(workbookData.borrowers)
           setRemovedBorrowerTransactions(workbookData.removedBorrowerTransactions)
           setProfitTransfers(workbookData.profitTransfers)
+          setOtherProfits(workbookData.otherProfits ?? initialOtherProfits.current)
           setProfitCashouts(workbookData.profitCashouts)
           setDeletedProfitTransactions(workbookData.deletedProfitTransactions.length > 0
             ? workbookData.deletedProfitTransactions
@@ -3790,7 +3984,7 @@ function App() {
             ? workbookData.deletedLoans
             : initialDeletedLoans.current)
         } else {
-          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current, initialProfitCashouts.current, initialDeletedSavingsTransactions.current, initialDeletedProfitTransactions.current, initialDeletedLoans.current)
+          await writeWorkbookData(directory, initialMembers.current, initialAccounts.current, initialBorrowers.current, initialRemovedBorrowerTransactions.current, initialProfitTransfers.current, initialProfitCashouts.current, initialDeletedSavingsTransactions.current, initialDeletedProfitTransactions.current, initialDeletedLoans.current, initialOtherProfits.current)
         }
         setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
@@ -3808,6 +4002,7 @@ function App() {
   useEffect(() => {
     saveMembersLocally(members)
     saveProfitCashoutsLocally(profitCashouts)
+    saveOtherProfitsLocally(otherProfits)
     saveDeletedSavingsTransactionsLocally(deletedSavingsTransactions)
     saveDeletedProfitTransactionsLocally(deletedProfitTransactions)
     saveDeletedLoansLocally(deletedLoans)
@@ -3825,7 +4020,7 @@ function App() {
         }
 
         setDatabaseMessage(`Saving Excel database: ${directory.name}…`)
-        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans)
+        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits)
         if (isActive) setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
         if (!isActive) return
@@ -3843,7 +4038,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans])
+  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits])
 
   const handleChooseDatabaseFolder = async () => {
     setIsDatabaseConnecting(true)
@@ -3855,6 +4050,7 @@ function App() {
       let connectedBorrowers = borrowers
       let connectedRemovedBorrowerTransactions = removedBorrowerTransactions
       let connectedProfitTransfers = profitTransfers
+      let connectedOtherProfits = otherProfits
       let connectedProfitCashouts = profitCashouts
       let connectedDeletedSavingsTransactions = deletedSavingsTransactions
       let connectedDeletedProfitTransactions = deletedProfitTransactions
@@ -3865,6 +4061,7 @@ function App() {
         connectedBorrowers = workbookData.borrowers
         connectedRemovedBorrowerTransactions = workbookData.removedBorrowerTransactions
         connectedProfitTransfers = workbookData.profitTransfers
+        connectedOtherProfits = workbookData.otherProfits ?? otherProfits
         connectedProfitCashouts = workbookData.profitCashouts
         connectedDeletedSavingsTransactions = workbookData.deletedSavingsTransactions.length > 0
           ? workbookData.deletedSavingsTransactions
@@ -3876,7 +4073,7 @@ function App() {
           ? workbookData.deletedLoans
           : deletedLoans
       } else {
-        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers, connectedProfitCashouts, connectedDeletedSavingsTransactions, connectedDeletedProfitTransactions, connectedDeletedLoans)
+        await writeWorkbookData(directory, connectedMembers, connectedAccounts, connectedBorrowers, connectedRemovedBorrowerTransactions, connectedProfitTransfers, connectedProfitCashouts, connectedDeletedSavingsTransactions, connectedDeletedProfitTransactions, connectedDeletedLoans, connectedOtherProfits)
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
@@ -3885,6 +4082,7 @@ function App() {
       setBorrowers(connectedBorrowers)
       setRemovedBorrowerTransactions(connectedRemovedBorrowerTransactions)
       setProfitTransfers(connectedProfitTransfers)
+      setOtherProfits(connectedOtherProfits)
       setProfitCashouts(connectedProfitCashouts)
       setDeletedSavingsTransactions(connectedDeletedSavingsTransactions)
       setDeletedProfitTransactions(connectedDeletedProfitTransactions)
@@ -3928,6 +4126,7 @@ function App() {
       const savedBorrowers = workbookData?.borrowers ?? borrowers
       const savedRemovedBorrowerTransactions = workbookData?.removedBorrowerTransactions ?? removedBorrowerTransactions
       const savedProfitTransfers = workbookData?.profitTransfers ?? profitTransfers
+      const savedOtherProfits = workbookData?.otherProfits ?? otherProfits
       const savedProfitCashouts = workbookData?.profitCashouts ?? profitCashouts
       const savedDeletedSavingsTransactions = workbookData?.deletedSavingsTransactions.length
         ? workbookData.deletedSavingsTransactions
@@ -3974,12 +4173,13 @@ function App() {
             accountMember.initialSavingsDate = today
           }
         }
-        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers, savedProfitCashouts, savedDeletedSavingsTransactions, savedDeletedProfitTransactions, savedDeletedLoans)
+        await writeWorkbookData(directory, updatedMembers, updatedAccounts, savedBorrowers, savedRemovedBorrowerTransactions, savedProfitTransfers, savedProfitCashouts, savedDeletedSavingsTransactions, savedDeletedProfitTransactions, savedDeletedLoans, savedOtherProfits)
         setMembers(updatedMembers)
         setAccounts(updatedAccounts)
         setBorrowers(savedBorrowers)
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
+        setOtherProfits(savedOtherProfits)
         setProfitCashouts(savedProfitCashouts)
         setDeletedSavingsTransactions(savedDeletedSavingsTransactions)
         setDeletedProfitTransactions(savedDeletedProfitTransactions)
@@ -3998,6 +4198,7 @@ function App() {
         setBorrowers(savedBorrowers)
         setRemovedBorrowerTransactions(savedRemovedBorrowerTransactions)
         setProfitTransfers(savedProfitTransfers)
+        setOtherProfits(savedOtherProfits)
         setProfitCashouts(savedProfitCashouts)
         setDeletedSavingsTransactions(savedDeletedSavingsTransactions)
         setDeletedProfitTransactions(savedDeletedProfitTransactions)
@@ -4035,6 +4236,11 @@ function App() {
           : member,
       ),
     )
+  }
+
+  const addOtherProfit = (profit: OtherProfit) => {
+    if (signedInRole !== 'admin') return
+    setOtherProfits((currentProfits) => [...currentProfits, profit])
   }
 
   const addMemberAccount = async (
@@ -4100,6 +4306,7 @@ function App() {
       deletedSavingsTransactions,
       deletedProfitTransactions,
       deletedLoans,
+      otherProfits,
     )
     setMembers(updatedMembers)
     setAccounts(updatedAccounts)
@@ -4139,7 +4346,7 @@ function App() {
     if (action === 'penalty' && (!Number.isFinite(memberProfit) || memberProfit <= 0)) return
 
     const date = getLocalDate()
-    const transferTotal = profitTransfers.reduce((total, transfer) => total + transfer.amount, 0)
+    const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
     if (action === 'add to savings') {
       addSavings(memberName, amount, date, 'member profit')
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
@@ -4177,11 +4384,33 @@ function App() {
     }])
   }
 
+  const sendProfitToEncoder = (memberName: string, encoderName: string, amount: number) => {
+    if (signedInRole !== 'admin' || !encoderName.trim() || !Number.isFinite(amount) || amount <= 0) return
+    const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
+    setProfitCashouts((currentCashouts) => {
+      if (currentCashouts.some((cashout) => cashout.memberName === memberName
+        && cashout.transferTotal === transferTotal
+        && cashout.action !== 'encoder'
+        && cashout.action !== 'penalty')) return currentCashouts
+      if (currentCashouts.some((cashout) => cashout.memberName === memberName
+        && cashout.action === 'encoder'
+        && cashout.transferTotal === transferTotal)) return currentCashouts
+      return [...currentCashouts, {
+        memberName,
+        amount,
+        date: getLocalDate(),
+        action: 'encoder',
+        transferTotal,
+        encoderName: encoderName.trim(),
+      }]
+    })
+  }
+
   const transferProfit = (dateFrom: string, dateTo: string) => {
     if (signedInRole !== 'admin') return
     setProfitTransfers((currentTransfers) => {
       const transferred = currentTransfers.reduce((total, transfer) => total + transfer.amount, 0)
-      let balance = Number(Math.max(0, totalInterestPaid - transferred).toFixed(2))
+      let balance = Number(Math.max(0, totalInterestPaid + totalOtherProfit - transferred).toFixed(2))
       const allocatedByPayment = new Map<string, number>()
       currentTransfers.forEach((transfer) => transfer.paymentAllocations?.forEach((allocation) => {
         allocatedByPayment.set(
@@ -4204,6 +4433,11 @@ function App() {
             amount: transaction.amount,
             date: transaction.date,
           })),
+        ...otherProfits.map((profit) => ({
+          transactionId: `other-profit-${profit.id}`,
+          amount: profit.amount,
+          date: profit.date,
+        })),
       ].filter((payment) => payment.date >= dateFrom && payment.date <= dateTo)
         .sort((first, second) => first.date.localeCompare(second.date))
       const paymentAllocations: Array<{ transactionId: string; amount: number }> = []
@@ -4440,6 +4674,7 @@ function App() {
       ...profitCashouts.map((transaction) => ({ ...transaction, deletedAt })),
     ])
     setProfitTransfers([])
+    setOtherProfits([])
     setProfitCashouts([])
     return { success: true }
   }
@@ -4592,6 +4827,8 @@ function App() {
       ['Total savings', totalSavings],
       ['Total loan proceeds', totalLoanProceeds],
       ['Total interest paid', totalInterestPaid],
+      ['Other profits', totalOtherProfit],
+      ['Total net profit', totalInterestPaid + totalOtherProfit],
       ['Total receivable interest', totalReceivableInterest],
       ['Group allowance', totalGroupAllowance],
       ['Group operating cost', groupUpdateData.operationCosts.reduce((total, cost) => total + cost.amount, 0)],
@@ -4749,18 +4986,28 @@ function App() {
       JSON.stringify(transfer.paymentAllocations ?? []),
     ]))
 
+    const otherProfitsSheet = workbook.addWorksheet('Other Profits')
+    otherProfitsSheet.addRow(['ID', 'Amount (PHP)', 'Source', 'Date'])
+    otherProfits.forEach((profit) => otherProfitsSheet.addRow([
+      profit.id,
+      profit.amount,
+      profit.source,
+      profit.date,
+    ]))
+
     const payoutsSheet = workbook.addWorksheet('Profit Payouts')
-    payoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)'])
+    payoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Encoder'])
     profitCashouts.forEach((cashout) => payoutsSheet.addRow([
       cashout.memberName,
       cashout.amount,
       cashout.date,
       cashout.action ?? 'cashout',
       cashout.transferTotal ?? '',
+      cashout.encoderName ?? '',
     ]))
 
     const deletedSheet = workbook.addWorksheet('Deleted Profit')
-    deletedSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Deleted At'])
+    deletedSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Deleted At', 'Encoder'])
     deletedProfitTransactions.forEach((transaction) => deletedSheet.addRow([
       transaction.memberName,
       transaction.amount,
@@ -4768,6 +5015,7 @@ function App() {
       transaction.action ?? 'cashout',
       transaction.transferTotal ?? '',
       transaction.deletedAt,
+      transaction.encoderName ?? '',
     ]))
   })
 
@@ -4778,6 +5026,7 @@ function App() {
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          totalOtherProfit={totalOtherProfit}
           monthlyNetProfit={monthlyNetProfit}
           cashInTransactions={cashInTransactions}
           cashOutTransactions={cashOutTransactions}
@@ -4847,12 +5096,15 @@ function App() {
           borrowers={borrowers}
           removedBorrowerTransactions={removedBorrowerTransactions}
           profitTransfers={profitTransfers}
+          otherProfits={otherProfits}
           profitCashouts={profitCashouts}
           totalInterestPaid={totalInterestPaid}
           totalReceivableInterest={totalReceivableInterest}
           totalGroupAllowance={totalGroupAllowance}
           isAdmin={signedInRole === 'admin'}
+          onAddOtherProfit={addOtherProfit}
           onApplyMemberProfitAction={applyMemberProfitAction}
+          onSendToEncoder={sendProfitToEncoder}
           onTransferProfit={transferProfit}
           onClearProfitTransactions={clearProfitTransactions}
         />
@@ -4886,6 +5138,7 @@ function App() {
           totalSavings={totalSavings}
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
+          totalOtherProfit={totalOtherProfit}
           monthlyNetProfit={monthlyNetProfit}
           cashInTransactions={cashInTransactions}
           cashOutTransactions={cashOutTransactions}
