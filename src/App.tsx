@@ -52,6 +52,15 @@ type SavingsTransaction = {
   previousAmount?: number
   newAmount?: number
 }
+type TransactionUndoSnapshot = {
+  members: Member[]
+  accounts: DatabaseAccount[]
+  borrowers: Borrower[]
+  removedBorrowerTransactions: RemovedBorrowerTransaction[]
+  profitTransfers: ProfitTransfer[]
+  otherProfits: OtherProfit[]
+  profitCashouts: ProfitCashout[]
+}
 const getSavingsAdjustmentTotal = (member: Member) =>
   (member.adjustments ?? []).reduce(
     (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
@@ -3976,6 +3985,14 @@ function App() {
   const [profitTransfers, setProfitTransfers] = useState<ProfitTransfer[]>([])
   const [otherProfits, setOtherProfits] = useState<OtherProfit[]>(loadSavedOtherProfits)
   const [profitCashouts, setProfitCashouts] = useState<ProfitCashout[]>(loadSavedProfitCashouts)
+  const [lastTransactionUndo, setLastTransactionUndo] = useState<{
+    label: string
+    snapshot: TransactionUndoSnapshot
+  } | null>(null)
+  const [isUndoPasswordOpen, setIsUndoPasswordOpen] = useState(false)
+  const [undoAdminPassword, setUndoAdminPassword] = useState('')
+  const [undoPasswordError, setUndoPasswordError] = useState('')
+  const [isVerifyingUndoPassword, setIsVerifyingUndoPassword] = useState(false)
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
   const [signedInRole, setSignedInRole] = useState<AccountRole | null>(null)
@@ -3994,6 +4011,69 @@ function App() {
   const initialProfitTransfers = useRef(profitTransfers)
   const initialOtherProfits = useRef(otherProfits)
   const initialProfitCashouts = useRef(profitCashouts)
+  const rememberTransactionUndo = (label: string) => {
+    setIsUndoPasswordOpen(false)
+    setUndoAdminPassword('')
+    setUndoPasswordError('')
+    setLastTransactionUndo({
+      label,
+      snapshot: {
+        members,
+        accounts,
+        borrowers,
+        removedBorrowerTransactions,
+        profitTransfers,
+        otherProfits,
+        profitCashouts,
+      },
+    })
+  }
+  const undoLastTransaction = () => {
+    if (!lastTransactionUndo) return
+    const { snapshot } = lastTransactionUndo
+    setMembers(snapshot.members)
+    setAccounts(snapshot.accounts)
+    setBorrowers(snapshot.borrowers)
+    setRemovedBorrowerTransactions(snapshot.removedBorrowerTransactions)
+    setProfitTransfers(snapshot.profitTransfers)
+    setOtherProfits(snapshot.otherProfits)
+    setProfitCashouts(snapshot.profitCashouts)
+    setLastTransactionUndo(null)
+  }
+  const handleUndoSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (signedInRole !== 'admin' || !lastTransactionUndo) return
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      setUndoPasswordError('The logged-in admin account could not be verified.')
+      return
+    }
+
+    setIsVerifyingUndoPassword(true)
+    setUndoPasswordError('')
+    try {
+      if (!(await verifyPassword(undoAdminPassword, adminAccount))) {
+        setUndoPasswordError('The admin password is incorrect.')
+        return
+      }
+      undoLastTransaction()
+      setIsUndoPasswordOpen(false)
+      setUndoAdminPassword('')
+    } catch (error) {
+      setUndoPasswordError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsVerifyingUndoPassword(false)
+    }
+  }
+  const closeUndoPasswordDialog = () => {
+    if (isVerifyingUndoPassword) return
+    setIsUndoPasswordOpen(false)
+    setUndoAdminPassword('')
+    setUndoPasswordError('')
+  }
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
@@ -4049,6 +4129,7 @@ function App() {
         const workbookData = await readWorkbookData(directory)
         if (!isActive) return
         if (workbookData) {
+          setLastTransactionUndo(null)
           setMembers(syncAccountMembers(workbookData.accounts, workbookData.members))
           setDeletedSavingsTransactions(workbookData.deletedSavingsTransactions.length > 0
             ? workbookData.deletedSavingsTransactions
@@ -4159,6 +4240,7 @@ function App() {
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
+      setLastTransactionUndo(null)
       setMembers(connectedMembers)
       setAccounts(connectedAccounts)
       setBorrowers(connectedBorrowers)
@@ -4290,6 +4372,7 @@ function App() {
         setSignedInRole(account.role)
       }
 
+      setLastTransactionUndo(null)
       setActiveTab('overview')
       setLoginMessage('')
       setIsLoginOpen(false)
@@ -4305,12 +4388,21 @@ function App() {
     }
   }
 
-  const addSavings = (memberName: string, amount: number, date: string, source?: 'member profit') => {
+  const addSavings = (
+    memberName: string,
+    amount: number,
+    date: string,
+    source?: 'member profit',
+    shouldRememberUndo = true,
+  ) => {
     const canEditMemberSavings = (member: Member) =>
       signedInRole === 'admin'
       || (signedInRole === 'member'
         && Boolean(signedInEmail.trim())
         && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || !canEditMemberSavings(member) || !Number.isFinite(amount) || amount <= 0 || !date) return
+    if (shouldRememberUndo) rememberTransactionUndo(source ? 'profit added to savings' : 'savings contribution')
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName && canEditMemberSavings(member)
@@ -4322,6 +4414,7 @@ function App() {
 
   const addOtherProfit = (profit: OtherProfit) => {
     if (signedInRole !== 'admin') return
+    rememberTransactionUndo('other profit')
     setOtherProfits((currentProfits) => [...currentProfits, profit])
   }
 
@@ -4392,6 +4485,8 @@ function App() {
     )
     setMembers(updatedMembers)
     setAccounts(updatedAccounts)
+    if (initialSavings > 0) rememberTransactionUndo('new member savings')
+    else setLastTransactionUndo(null)
     setDatabaseMessage(`Excel database connected: ${directory.name}`)
     return { success: true }
   }
@@ -4400,6 +4495,9 @@ function App() {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
       || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim() || !date) return
     const newAmount = Number(amount.toFixed(2))
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || Number(getMemberSavings(member).toFixed(2)) === newAmount) return
+    rememberTransactionUndo('savings adjustment')
     setMembers((currentMembers) => currentMembers.map((member) => {
       if (member.name !== memberName) return member
       const previousAmount = Number(getMemberSavings(member).toFixed(2))
@@ -4430,7 +4528,8 @@ function App() {
     const date = getLocalDate()
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
     if (action === 'add to savings') {
-      addSavings(memberName, amount, date, 'member profit')
+      rememberTransactionUndo('profit added to savings')
+      addSavings(memberName, amount, date, 'member profit', false)
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
         memberName,
         amount,
@@ -4442,6 +4541,7 @@ function App() {
     }
 
     if (action === 'get profit') {
+      rememberTransactionUndo('profit cashout')
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
         memberName,
         amount,
@@ -4456,7 +4556,8 @@ function App() {
         && Boolean(signedInEmail.trim())
         && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
     if (!canEditMemberSavings) return
-    pullOutSavings(memberName, amount, date, 'Profit penalty')
+    rememberTransactionUndo('profit penalty')
+    pullOutSavings(memberName, amount, date, 'Profit penalty', false)
     setProfitCashouts((currentCashouts) => [...currentCashouts, {
       memberName,
       amount,
@@ -4474,25 +4575,30 @@ function App() {
       || payments.some((payment) => !payment.memberName.trim()
         || !Number.isFinite(payment.amount) || payment.amount <= 0)) return
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
+    if (profitCashouts.some((cashout) =>
+      cashout.transferTotal === transferTotal
+      && cashout.action !== 'penalty')) return
+    const date = getLocalDate()
+    const payouts = payments.map(({ memberName, amount }) => ({
+      memberName,
+      amount,
+      date,
+      action: 'encoder' as const,
+      transferTotal,
+      encoderName: encoderName.trim(),
+    }))
+    rememberTransactionUndo('encoder payouts')
     setProfitCashouts((currentCashouts) => {
       if (currentCashouts.some((cashout) =>
         cashout.transferTotal === transferTotal
         && cashout.action !== 'penalty')) return currentCashouts
-      const date = getLocalDate()
-      return [...currentCashouts, ...payments.map(({ memberName, amount }) => ({
-        memberName,
-        amount,
-        date,
-        action: 'encoder' as const,
-        transferTotal,
-        encoderName: encoderName.trim(),
-      }))]
+      return [...currentCashouts, ...payouts]
     })
   }
 
   const transferProfit = (dateFrom: string, dateTo: string) => {
     if (signedInRole !== 'admin') return
-    setProfitTransfers((currentTransfers) => {
+    const createTransfer = (currentTransfers: ProfitTransfer[]) => {
       const transferred = currentTransfers.reduce((total, transfer) => total + transfer.amount, 0)
       let balance = Number(Math.max(0, totalInterestPaid + totalOtherProfit - transferred).toFixed(2))
       const allocatedByPayment = new Map<string, number>()
@@ -4535,20 +4641,36 @@ function App() {
       })
       const amount = paymentAllocations.reduce((total, allocation) => total + allocation.amount, 0)
       return amount > 0
-        ? [...currentTransfers, {
+        ? {
           amount,
           date: getLocalDate(),
           periodFrom: dateFrom,
           periodTo: dateTo,
           paymentAllocations,
-        }]
-        : currentTransfers
+        }
+        : null
+    }
+    if (!createTransfer(profitTransfers)) return
+    rememberTransactionUndo('profit transfer')
+    setProfitTransfers((currentTransfers) => {
+      const transfer = createTransfer(currentTransfers)
+      return transfer ? [...currentTransfers, transfer] : currentTransfers
     })
   }
 
-  const pullOutSavings = (memberName: string, amount: number, date: string, reason: string) => {
+  const pullOutSavings = (
+    memberName: string,
+    amount: number,
+    date: string,
+    reason: string,
+    shouldRememberUndo = true,
+  ) => {
     if (signedInRole !== 'admin') return
     const amountInCents = Math.round(amount * 100)
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || !Number.isFinite(amount) || amountInCents <= 0
+      || amountInCents > Math.round(getMemberSavings(member) * 100)) return
+    if (shouldRememberUndo) rememberTransactionUndo('savings withdrawal')
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName
@@ -4589,6 +4711,7 @@ function App() {
       return { success: false, message: 'You cannot delete the currently signed-in admin account.' }
     }
 
+    setLastTransactionUndo(null)
     setMembers((currentMembers) => currentMembers.filter((member) => member.name !== memberName))
     if (linkedAccount) {
       setAccounts((currentAccounts) => currentAccounts.filter((account) =>
@@ -4617,6 +4740,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const resetDate = getLocalDate()
     const deletedTransactions = members.flatMap((member): DeletedSavingsTransaction[] => [
       ...(member.initialSavings > 0 ? [{
@@ -4686,6 +4810,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const deletedAt = getLocalDate()
     const borrowerRecords = borrowers.flatMap((borrower): DeletedLoanRecord[] => {
       const borrowerTransactions = borrower.transactions ?? []
@@ -4747,6 +4872,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const deletedAt = getLocalDate()
     setDeletedProfitTransactions((currentTransactions) => [
       ...currentTransactions,
@@ -4760,6 +4886,7 @@ function App() {
 
   const addBorrower = (borrower: Borrower) => {
     if (signedInRole !== 'admin') return
+    rememberTransactionUndo('new loan')
     setBorrowers((currentBorrowers) => [...currentBorrowers, borrower])
   }
 
@@ -4769,6 +4896,7 @@ function App() {
     if (!borrowerToRemove
       || hasOutstandingBorrowerBalance(borrowerToRemove.loanAmount)
       || hasOutstandingBorrowerBalance(borrowerToRemove.paydayInterest)) return
+    setLastTransactionUndo(null)
     setRemovedBorrowerTransactions((currentTransactions) => [
       ...currentTransactions,
       ...(borrowerToRemove.transactions ?? []).map((transaction) => ({
@@ -4786,6 +4914,9 @@ function App() {
 
   const addBorrowerInterest = (borrowerId: string, date: string) => {
     if (signedInRole !== 'admin') return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || borrower.loanAmount <= 0) return
+    rememberTransactionUndo('interest accrued')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const accruedInterest = Number((borrower.loanAmount * borrower.interestRate / 100).toFixed(2))
@@ -4806,6 +4937,9 @@ function App() {
 
   const payBorrowerInterest = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || amount > borrower.paydayInterest) return
+    rememberTransactionUndo('interest payment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId || amount > borrower.paydayInterest) return borrower
       const remainingInterest = Number((borrower.paydayInterest - amount).toFixed(2))
@@ -4825,6 +4959,9 @@ function App() {
 
   const payBorrowerPrincipal = (borrowerId: string, amount: number) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || hasOutstandingBorrowerBalance(borrower.paydayInterest) || amount > borrower.loanAmount) return
+    rememberTransactionUndo('principal payment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId
         || hasOutstandingBorrowerBalance(borrower.paydayInterest)
@@ -4846,6 +4983,8 @@ function App() {
 
   const addBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    if (!borrowers.some((borrower) => borrower.id === borrowerId)) return
+    rememberTransactionUndo('principal addition')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const updatedLoanAmount = Number((borrower.loanAmount + amount).toFixed(2))
@@ -4866,6 +5005,9 @@ function App() {
 
   const editBorrowerPrincipal = (borrowerId: string, amount: number, reason: string, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0 || !reason.trim()) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || Number(borrower.loanAmount.toFixed(2)) === Number(amount.toFixed(2))) return
+    rememberTransactionUndo('principal adjustment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const previousAmount = Number(borrower.loanAmount.toFixed(2))
@@ -5294,6 +5436,27 @@ function App() {
                   </button>
                 ))}
               </nav>
+              {signedInRole === 'admin' && (
+                <button
+                  type="button"
+                  className="secondary-button undo-transaction-button"
+                  disabled={!lastTransactionUndo}
+                  title={lastTransactionUndo
+                    ? `Undo ${lastTransactionUndo.label}`
+                    : 'No recent transaction to undo'}
+                  aria-label={lastTransactionUndo
+                    ? `Undo last transaction: ${lastTransactionUndo.label}`
+                    : 'No recent transaction to undo'}
+                  onClick={() => {
+                    if (!lastTransactionUndo) return
+                    setUndoAdminPassword('')
+                    setUndoPasswordError('')
+                    setIsUndoPasswordOpen(true)
+                  }}
+                >
+                  <span aria-hidden="true">↶</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="login-button"
@@ -5302,6 +5465,10 @@ function App() {
                   setSignedInUser('')
                   setSignedInEmail('')
                   setSignedInRole(null)
+                  setLastTransactionUndo(null)
+                  setIsUndoPasswordOpen(false)
+                  setUndoAdminPassword('')
+                  setUndoPasswordError('')
                   setLoginMessage('')
                   setIsRegisterMode(false)
                 }}
@@ -5439,6 +5606,64 @@ function App() {
           </div>,
           document.body,
         )
+      )}
+      {isUndoPasswordOpen && signedInRole === 'admin' && createPortal(
+        <div className="login-overlay" data-theme={isDarkMode ? 'dark' : 'light'}>
+          <section
+            className="login-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="undo-password-title"
+          >
+            <div className="login-dialog-header">
+              <div>
+                <p className="eyebrow">Protected action</p>
+                <h2 id="undo-password-title">Undo last transaction</h2>
+              </div>
+              <button
+                type="button"
+                className="login-close-button"
+                aria-label="Cancel undo"
+                disabled={isVerifyingUndoPassword}
+                onClick={closeUndoPasswordDialog}
+              >
+                ×
+              </button>
+            </div>
+            <form className="login-form" noValidate onSubmit={(event) => void handleUndoSubmit(event)}>
+              <p className="login-note">
+                Enter your admin password to undo {lastTransactionUndo?.label ?? 'the last transaction'}.
+              </p>
+              <label>
+                Admin password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  required
+                  value={undoAdminPassword}
+                  onChange={(event) => {
+                    setUndoAdminPassword(event.target.value)
+                    setUndoPasswordError('')
+                  }}
+                />
+              </label>
+              <button type="submit" className="primary-button" disabled={isVerifyingUndoPassword}>
+                {isVerifyingUndoPassword ? 'Verifying…' : 'Confirm undo'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={isVerifyingUndoPassword}
+                onClick={closeUndoPasswordDialog}
+              >
+                Cancel
+              </button>
+              {undoPasswordError && <p className="member-error" role="alert">{undoPasswordError}</p>}
+            </form>
+          </section>
+        </div>,
+        document.body,
       )}
     </div>
   )
