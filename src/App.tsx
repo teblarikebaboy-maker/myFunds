@@ -1767,7 +1767,7 @@ function LoansPage({
         <strong>{formatCurrency(totalReceivableInterest)}</strong>
       </section>
 
-      {isAddingBorrower && (
+      {isAdmin && isAddingBorrower && (
         <form className="add-borrower-form" noValidate onSubmit={handleAddBorrower}>
           <label>
             Borrower name
@@ -1844,7 +1844,12 @@ function LoansPage({
             <h3>Borrower directory</h3>
           </div>
           <div className="borrower-directory-controls">
-            <button type="button" className="secondary-button" onClick={() => setIsAddingBorrower((open) => !open)}>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!isAdmin}
+              onClick={() => setIsAddingBorrower((open) => !open)}
+            >
               {isAddingBorrower ? 'Cancel' : 'Add borrower'}
             </button>
             {isAdmin && (isClearConfirmationOpen ? (
@@ -1947,6 +1952,7 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
+                      disabled={!isAdmin}
                       onClick={() => {
                         setAddingInterestBorrowerId((currentId) =>
                           currentId === borrower.id ? null : borrower.id,
@@ -1963,7 +1969,7 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      disabled={borrower.loanAmount <= 0 || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
+                      disabled={!isAdmin || borrower.loanAmount <= 0 || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
                       onClick={() => {
                         setPayingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalPaymentAmount('')
@@ -1976,6 +1982,7 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
+                      disabled={!isAdmin}
                       onClick={() => {
                         setAddingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalAdditionAmount('')
@@ -1987,27 +1994,26 @@ function LoansPage({
                     >
                       Add principal
                     </button>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        className="secondary-button borrower-interest-button"
-                        onClick={() => {
-                          setEditingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
-                          setEditedPrincipalAmount(borrower.loanAmount.toFixed(2))
-                          setPrincipalEditReason('')
-                          setPrincipalEditError('')
-                          setAddingPrincipalBorrowerId(null)
-                          setPayingPrincipalBorrowerId(null)
-                          setPayingBorrowerId(null)
-                        }}
-                      >
-                        Edit principal
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      disabled={borrower.paydayInterest <= 0}
+                      disabled={!isAdmin}
+                      onClick={() => {
+                        setEditingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
+                        setEditedPrincipalAmount(borrower.loanAmount.toFixed(2))
+                        setPrincipalEditReason('')
+                        setPrincipalEditError('')
+                        setAddingPrincipalBorrowerId(null)
+                        setPayingPrincipalBorrowerId(null)
+                        setPayingBorrowerId(null)
+                      }}
+                    >
+                      Edit principal
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button borrower-interest-button"
+                      disabled={!isAdmin || borrower.paydayInterest <= 0}
                       onClick={() => {
                         setPayingBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setInterestPaymentAmount('')
@@ -2021,14 +2027,14 @@ function LoansPage({
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
-                      disabled={hasOutstandingBorrowerBalance(borrower.loanAmount) || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
+                      disabled={!isAdmin || hasOutstandingBorrowerBalance(borrower.loanAmount) || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
                       onClick={() => onRemoveBorrower(borrower.id)}
                     >
                       Remove
                     </button>
                   </div>
                 </div>
-                {addingInterestBorrowerId === borrower.id && (
+                {isAdmin && addingInterestBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
@@ -2114,7 +2120,7 @@ function LoansPage({
                     {interestPaymentError && <p className="member-error" role="alert">{interestPaymentError}</p>}
                   </form>
                 )}
-                {payingPrincipalBorrowerId === borrower.id && (
+                {isAdmin && payingPrincipalBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
@@ -2150,7 +2156,7 @@ function LoansPage({
                     {principalPaymentError && <p className="member-error" role="alert">{principalPaymentError}</p>}
                   </form>
                 )}
-                {editingPrincipalBorrowerId === borrower.id && (
+                {isAdmin && editingPrincipalBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
@@ -2198,7 +2204,7 @@ function LoansPage({
                     {principalEditError && <p className="member-error" role="alert">{principalEditError}</p>}
                   </form>
                 )}
-                {addingPrincipalBorrowerId === borrower.id && (
+                {isAdmin && addingPrincipalBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
@@ -5075,6 +5081,24 @@ function App() {
           />
         )
       }
+      if (activeTab === 'loans') {
+        return (
+          <LoansPage
+            borrowers={borrowers}
+            guarantors={registeredGuarantors}
+            isAdmin={false}
+            onAddBorrower={addBorrower}
+            onAddBorrowerInterest={addBorrowerInterest}
+            onPayBorrowerInterest={payBorrowerInterest}
+            onPayBorrowerPrincipal={payBorrowerPrincipal}
+            onAddBorrowerPrincipal={addBorrowerPrincipal}
+            onEditBorrowerPrincipal={editBorrowerPrincipal}
+            onRemoveBorrower={removeBorrower}
+            onClearLoans={clearLoanRecords}
+            totalInterestPaid={totalInterestPaid}
+          />
+        )
+      }
       return <AccountPage name={signedInUser} email={signedInEmail} />
     }
 
@@ -5190,7 +5214,9 @@ function App() {
             </div>
             <div className="topbar-actions">
               <nav className="main-nav" aria-label="Primary navigation">
-                {(signedInRole === 'admin' ? tabs : tabs.slice(0, 2)).map((tab) => (
+                {(signedInRole === 'admin'
+                  ? tabs
+                  : tabs.filter((tab) => ['overview', 'savings', 'loans'].includes(tab.id))).map((tab) => (
                   <button
                     key={tab.id}
                     type="button"
