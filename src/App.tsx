@@ -71,6 +71,73 @@ const getMemberProfitShareSavings = (member: Member) =>
     - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
     + getSavingsAdjustmentTotal(member))
 
+const getMemberProfitShares = (
+  members: Member[],
+  profitCashouts: ProfitCashout[],
+  distributedProfitTotal: number,
+) => {
+  const totalSavings = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
+  const settledTransfersByMember = new Map<string, number>()
+  const legacyCashoutsByMember = new Map<string, number>()
+  const encoderDeductionsByMember = new Map<string, number>()
+  profitCashouts.forEach((cashout) => {
+    if (cashout.action !== 'penalty' && cashout.action !== 'encoder' && cashout.transferTotal !== undefined) {
+      settledTransfersByMember.set(
+        cashout.memberName,
+        Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
+      )
+    }
+  })
+  profitCashouts.forEach((cashout) => {
+    if (cashout.action === 'encoder') {
+      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
+      if (cashout.transferTotal === undefined
+        ? settledTransfers === undefined
+        : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
+        encoderDeductionsByMember.set(
+          cashout.memberName,
+          (encoderDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+        )
+      }
+    }
+  })
+  const penaltyDeductionsByMember = new Map<string, number>()
+  profitCashouts.forEach((cashout) => {
+    if (cashout.action === 'penalty') {
+      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
+      if (cashout.transferTotal === undefined
+        ? settledTransfers === undefined
+        : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
+        penaltyDeductionsByMember.set(
+          cashout.memberName,
+          (penaltyDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+        )
+      }
+    } else if (cashout.transferTotal === undefined
+      && cashout.action !== 'added to savings'
+      && cashout.action !== 'encoder') {
+      legacyCashoutsByMember.set(
+        cashout.memberName,
+        (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
+      )
+    }
+  })
+  return members.map((member) => {
+    const memberSavings = getMemberProfitShareSavings(member)
+    const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
+    const settledTransfers = settledTransfersByMember.get(member.name)
+    const eligibleTransfers = settledTransfers === undefined
+      ? distributedProfitTotal
+      : Math.max(0, distributedProfitTotal - settledTransfers)
+    const grossProfitShare = distributedProfitTotal > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
+    const legacyCashouts = settledTransfers === undefined ? legacyCashoutsByMember.get(member.name) ?? 0 : 0
+    const penaltyDeductions = penaltyDeductionsByMember.get(member.name) ?? 0
+    const encoderDeductions = encoderDeductionsByMember.get(member.name) ?? 0
+    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions - encoderDeductions).toFixed(2))
+    return { member, sharePercentage, profitShare }
+  })
+}
+
 const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
   {
     id: `${member.name}-initial`,
@@ -2352,6 +2419,42 @@ function LoansPage({
   )
 }
 
+function MemberProfitSummary({
+  memberProfits,
+}: {
+  memberProfits: ReturnType<typeof getMemberProfitShares>
+}) {
+  return (
+    <section className="panel full-width-panel profits-section profits-member-summary-section">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">Overview</p>
+          <h3>Members Profit Summary</h3>
+        </div>
+      </div>
+      {memberProfits.length > 0 ? (
+        <ul className="profits-member-summary-list">
+          {memberProfits.map(({ member, sharePercentage, profitShare }) => (
+            <li key={member.name} className="profits-member-summary-row">
+              <strong>{member.name}</strong>
+              <span>
+                <small>Profit</small>
+                <b>{formatCurrency(profitShare)}</b>
+              </span>
+              <span>
+                <small>Savings share</small>
+                <b>{sharePercentage.toFixed(1)}%</b>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="savings-history-empty">No member profit shares to summarize.</p>
+      )}
+    </section>
+  )
+}
+
 function ProfitsPage({
   members,
   borrowers,
@@ -2529,64 +2632,7 @@ function ProfitsPage({
     { label: 'Group allowance', value: formatCurrency(totalGroupAllowance), tone: 'positive' },
     { label: 'Group operating cost', value: formatCurrency(totalGroupOperationCost), tone: 'negative' },
   ]
-  const totalSavings = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
-  const settledTransfersByMember = new Map<string, number>()
-  const legacyCashoutsByMember = new Map<string, number>()
-  const encoderDeductionsByMember = new Map<string, number>()
-  profitCashouts.forEach((cashout) => {
-    if (cashout.action !== 'penalty' && cashout.action !== 'encoder' && cashout.transferTotal !== undefined) {
-      settledTransfersByMember.set(
-        cashout.memberName,
-        Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
-      )
-    }
-  })
-  profitCashouts.forEach((cashout) => {
-    if (cashout.action === 'encoder') {
-      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
-      if (cashout.transferTotal === undefined
-        ? settledTransfers === undefined
-        : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
-        encoderDeductionsByMember.set(
-          cashout.memberName,
-          (encoderDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
-        )
-      }
-    }
-  })
-  const penaltyDeductionsByMember = new Map<string, number>()
-  profitCashouts.forEach((cashout) => {
-    if (cashout.action === 'penalty') {
-      const settledTransfers = settledTransfersByMember.get(cashout.memberName)
-      if (cashout.transferTotal === undefined ? settledTransfers === undefined : settledTransfers === undefined || cashout.transferTotal > settledTransfers) {
-        penaltyDeductionsByMember.set(
-          cashout.memberName,
-          (penaltyDeductionsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
-        )
-      }
-    } else if (cashout.transferTotal === undefined
-      && cashout.action !== 'added to savings'
-      && cashout.action !== 'encoder') {
-      legacyCashoutsByMember.set(
-        cashout.memberName,
-        (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
-      )
-    }
-  })
-  const memberProfits = members.map((member) => {
-    const memberSavings = getMemberProfitShareSavings(member)
-    const sharePercentage = totalSavings > 0 ? (memberSavings / totalSavings) * 100 : 0
-    const settledTransfers = settledTransfersByMember.get(member.name)
-    const eligibleTransfers = settledTransfers === undefined
-      ? distributedProfitTotal
-      : Math.max(0, distributedProfitTotal - settledTransfers)
-    const grossProfitShare = distributedProfitTotal > 0 ? (sharePercentage / 100) * eligibleTransfers : 0
-    const legacyCashouts = settledTransfers === undefined ? legacyCashoutsByMember.get(member.name) ?? 0 : 0
-    const penaltyDeductions = penaltyDeductionsByMember.get(member.name) ?? 0
-    const encoderDeductions = encoderDeductionsByMember.get(member.name) ?? 0
-    const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions - encoderDeductions).toFixed(2))
-    return { member, sharePercentage, profitShare }
-  })
+  const memberProfits = getMemberProfitShares(members, profitCashouts, distributedProfitTotal)
   const encoderRate = Number(encoderPercentage)
   const encoderPayments = memberProfits.map(({ member, profitShare }) => ({
     memberName: member.name,
@@ -2861,33 +2907,7 @@ function ProfitsPage({
           </p>
         )}
       </section>
-      <section className="panel full-width-panel profits-section profits-member-summary-section">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Overview</p>
-            <h3>Members Profit Summary</h3>
-          </div>
-        </div>
-        {memberProfits.length > 0 ? (
-          <ul className="profits-member-summary-list">
-            {memberProfits.map(({ member, sharePercentage, profitShare }) => (
-              <li key={member.name} className="profits-member-summary-row">
-                <strong>{member.name}</strong>
-                <span>
-                  <small>Profit</small>
-                  <b>{formatCurrency(profitShare)}</b>
-                </span>
-                <span>
-                  <small>Savings share</small>
-                  <b>{sharePercentage.toFixed(1)}%</b>
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No member profit shares to summarize.</p>
-        )}
-      </section>
+      <MemberProfitSummary memberProfits={memberProfits} />
       <section className="panel full-width-panel profits-section profits-members-section">
         <div className="panel-header">
           <div>
@@ -3195,7 +3215,7 @@ const loadGroupUpdateData = () => {
   }
 }
 
-function GroupUpdatePage() {
+function GroupUpdatePage({ members }: { members: Member[] }) {
   const [loadedData] = useState(loadGroupUpdateData)
   const [data, setData] = useState<GroupUpdateData>(loadedData.data)
   const [storageError, setStorageError] = useState(loadedData.error)
@@ -3339,8 +3359,8 @@ function GroupUpdatePage() {
   const handleAddDirector = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const name = directorName.trim()
-    if (!name) {
-      setDirectorError('Enter a director name.')
+    if (!members.some((member) => member.name === name)) {
+      setDirectorError('Choose a registered member as director.')
       return
     }
     if (data.boardOfDirectors.some((director) => director.toLowerCase() === name.toLowerCase())) {
@@ -3591,10 +3611,23 @@ function GroupUpdatePage() {
           </div>
           <form className="group-update-form" noValidate onSubmit={handleAddDirector}>
             <label>
-              Director name
-              <input value={directorName} onChange={(event) => setDirectorName(event.target.value)} placeholder="Enter a name" />
+              Choose a member
+              <select
+                value={directorName}
+                onChange={(event) => {
+                  setDirectorName(event.target.value)
+                  setDirectorError('')
+                }}
+                required
+              >
+                <option value="">Select a registered member</option>
+                {members.map((member) => (
+                  <option key={member.name} value={member.name}>{member.name}</option>
+                ))}
+              </select>
             </label>
-            <button type="submit" className="primary-button">Add director</button>
+            <button type="submit" className="primary-button" disabled={members.length === 0}>Add director</button>
+            {members.length === 0 && <p className="group-update-empty">Add a member before assigning a director.</p>}
             {directorError && <p className="member-error" role="alert">{directorError}</p>}
           </form>
           {data.boardOfDirectors.length > 0 ? (
@@ -5099,6 +5132,24 @@ function App() {
           />
         )
       }
+      if (activeTab === 'profits') {
+        const distributedProfitTotal = Number(
+          profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2),
+        )
+        return (
+          <main className="page-view profits-page">
+            <section className="page-header">
+              <div>
+                <p className="eyebrow">Profits</p>
+                <h2>Performance summary</h2>
+              </div>
+            </section>
+            <MemberProfitSummary
+              memberProfits={getMemberProfitShares(members, profitCashouts, distributedProfitTotal)}
+            />
+          </main>
+        )
+      }
       return <AccountPage name={signedInUser} email={signedInEmail} />
     }
 
@@ -5179,7 +5230,7 @@ function App() {
           />
         )
       case 'group-update':
-        return <GroupUpdatePage />
+        return <GroupUpdatePage members={members} />
       case 'overview':
       default:
         return <OverviewPage
@@ -5216,7 +5267,7 @@ function App() {
               <nav className="main-nav" aria-label="Primary navigation">
                 {(signedInRole === 'admin'
                   ? tabs
-                  : tabs.filter((tab) => ['overview', 'savings', 'loans'].includes(tab.id))).map((tab) => (
+                  : tabs.filter((tab) => ['overview', 'savings', 'loans', 'profits'].includes(tab.id))).map((tab) => (
                   <button
                     key={tab.id}
                     type="button"
