@@ -47,6 +47,7 @@ type SavingsTransaction = {
   amount: number
   date: string
   reason?: string
+  recordedBy?: string
   fee?: number
   previousAmount?: number
   newAmount?: number
@@ -152,6 +153,7 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
     type: contribution.source === 'member profit' ? 'Profit added to savings' : 'Added savings',
     amount: contribution.amount,
     date: contribution.date,
+    recordedBy: contribution.recordedBy,
   })),
   ...member.withdrawals.map((withdrawal, index) => ({
     id: `${member.name}-withdrawal-${index}`,
@@ -160,6 +162,7 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
     amount: -withdrawal.amount,
     date: withdrawal.date,
     reason: withdrawal.reason,
+    recordedBy: withdrawal.recordedBy,
     fee: withdrawal.amount * 0.1,
   })),
   ...(member.adjustments ?? []).map((adjustment) => ({
@@ -231,6 +234,7 @@ type OverviewCashOutTransaction = {
   amount: number
   date: string
   reason?: string
+  recordedBy?: string
   previousAmount?: number
   newAmount?: number
 }
@@ -264,6 +268,7 @@ const getOverviewCashOutTransactions = (
     type: 'Pull-out',
     amount: withdrawal.amount,
     date: withdrawal.date,
+    recordedBy: withdrawal.recordedBy,
   }))),
   ...members.flatMap((member) => (member.adjustments ?? [])
     .filter((adjustment) => adjustment.newAmount < adjustment.previousAmount)
@@ -286,6 +291,7 @@ type OverviewCashInTransaction = {
   amount: number
   date: string
   reason?: string
+  recordedBy?: string
   previousAmount?: number
   newAmount?: number
 }
@@ -303,12 +309,22 @@ const getOverviewCashInTransactions = (
     amount: profit.amount,
     date: profit.date,
   })),
+  ...members
+    .filter((member) => member.initialSavings > 0)
+    .map((member) => ({
+      id: `initial-savings-${member.name}`,
+      name: member.name,
+      type: 'Initial savings',
+      amount: member.initialSavings,
+      date: member.initialSavingsDate,
+    })),
   ...members.flatMap((member) => member.contributions.map((contribution, index) => ({
     id: `savings-${member.name}-${contribution.date}-${index}`,
     name: member.name,
     type: contribution.source === 'member profit' ? 'Profit added to savings' : 'Add savings',
     amount: contribution.amount,
     date: contribution.date,
+    recordedBy: contribution.recordedBy,
   }))),
   ...members.flatMap((member) => (member.adjustments ?? [])
     .filter((adjustment) => adjustment.newAmount > adjustment.previousAmount)
@@ -687,6 +703,7 @@ function OverviewPage({
                     <strong>{transaction.name} · {transaction.type}</strong>
                     <small>
                       {formatDate(transaction.date)}
+                      {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
                       {transaction.reason && ` · ${transaction.reason}`}
                       {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
                         && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
@@ -717,6 +734,7 @@ function OverviewPage({
                     <strong>{transaction.name} · {transaction.type}</strong>
                     <small>
                       {formatDate(transaction.date)}
+                      {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
                       {transaction.reason && ` · ${transaction.reason}`}
                       {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
                         && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
@@ -1372,8 +1390,10 @@ function SavingsPage({
                   {canEditSavings && (
                     <>
                       <AddMemberSavingsForm memberName={member.name} onAddSavings={onAddSavings} />
-                      <PullOutMemberSavingsForm member={member} onPullOutSavings={onPullOutSavings} />
                     </>
+                  )}
+                  {isAdmin && (
+                    <PullOutMemberSavingsForm member={member} onPullOutSavings={onPullOutSavings} />
                   )}
                   {isAdmin && deletingMemberName === member.name && (
                     <form
@@ -1411,6 +1431,7 @@ function SavingsPage({
                             <strong>{transaction.type}</strong>
                             <small>
                               {formatDate(transaction.date)}
+                              {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
                               {transaction.reason && ` · ${transaction.reason}`}
                               {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
                                 && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
@@ -4293,7 +4314,7 @@ function App() {
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName && canEditMemberSavings(member)
-          ? { ...member, contributions: [...member.contributions, { amount, date, source }] }
+          ? { ...member, contributions: [...member.contributions, { amount, date, source, recordedBy: signedInUser || undefined }] }
           : member,
       ),
     )
@@ -4526,20 +4547,15 @@ function App() {
   }
 
   const pullOutSavings = (memberName: string, amount: number, date: string, reason: string) => {
+    if (signedInRole !== 'admin') return
     const amountInCents = Math.round(amount * 100)
-    const canEditMemberSavings = (member: Member) =>
-      signedInRole === 'admin'
-      || (signedInRole === 'member'
-        && Boolean(signedInEmail.trim())
-        && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName
         && Number.isFinite(amount)
         && amountInCents > 0
         && amountInCents <= Math.round(getMemberSavings(member) * 100)
-        && canEditMemberSavings(member)
-          ? { ...member, withdrawals: [...member.withdrawals, { amount: amountInCents / 100, date, reason }] }
+          ? { ...member, withdrawals: [...member.withdrawals, { amount: amountInCents / 100, date, reason, recordedBy: signedInUser || undefined }] }
           : member,
       ),
     )

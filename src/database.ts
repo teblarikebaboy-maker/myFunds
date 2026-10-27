@@ -1,7 +1,7 @@
 import type ExcelJS from 'exceljs'
 
-export type SavingsContribution = { amount: number; date: string; source?: 'member profit' }
-export type SavingsWithdrawal = { amount: number; date: string; reason: string }
+export type SavingsContribution = { amount: number; date: string; source?: 'member profit'; recordedBy?: string }
+export type SavingsWithdrawal = { amount: number; date: string; reason: string; recordedBy?: string }
 export type SavingsAdjustment = {
   id: string
   previousAmount: number
@@ -424,6 +424,7 @@ export const readWorkbookData = async (
       source: String(row.getCell(4).value ?? '').trim().toLowerCase() === 'member profit'
         ? 'member profit'
         : undefined,
+      recordedBy: String(row.getCell(5).value ?? '').trim() || undefined,
     })
   })
 
@@ -438,6 +439,7 @@ export const readWorkbookData = async (
       date: getCellDate(row.getCell(2).value),
       amount: getCellNumber(row.getCell(3).value, `${name}, withdrawal`),
       reason: String(row.getCell(4).value ?? ''),
+      recordedBy: String(row.getCell(5).value ?? '').trim() || undefined,
     })
   })
 
@@ -788,15 +790,15 @@ export const writeWorkbookData = async (
   ]))
 
   const contributionsSheet = workbook.addWorksheet('Contributions')
-  contributionsSheet.addRow(['Member', 'Date', 'Amount', 'Source'])
+  contributionsSheet.addRow(['Member', 'Date', 'Amount', 'Source', 'Recorded By'])
   members.forEach((member) => member.contributions.forEach((contribution) => {
-    contributionsSheet.addRow([member.name, contribution.date, contribution.amount, contribution.source ?? ''])
+    contributionsSheet.addRow([member.name, contribution.date, contribution.amount, contribution.source ?? '', contribution.recordedBy ?? ''])
   }))
 
   const withdrawalsSheet = workbook.addWorksheet('Withdrawals')
-  withdrawalsSheet.addRow(['Member', 'Date', 'Amount', 'Reason'])
+  withdrawalsSheet.addRow(['Member', 'Date', 'Amount', 'Reason', 'Recorded By'])
   members.forEach((member) => member.withdrawals.forEach((withdrawal) => {
-    withdrawalsSheet.addRow([member.name, withdrawal.date, withdrawal.amount, withdrawal.reason])
+    withdrawalsSheet.addRow([member.name, withdrawal.date, withdrawal.amount, withdrawal.reason, withdrawal.recordedBy ?? ''])
   }))
 
   const savingsAdjustmentsSheet = workbook.addWorksheet('Savings Adjustments')
