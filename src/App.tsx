@@ -1140,6 +1140,8 @@ function SavingsPage({
     .reduce((total, member) => total + getMemberSavings(member), 0)
   const selectedMemberDetails = members.find((member) => member.name === selectedMember)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const availableFunds = overallSavings - totalLoanProceeds
   const getSavingsShare = (member: Member) => totalSavings > 0 ? (getMemberSavings(member) / totalSavings) * 100 : 0
   const savingsHistory: SavingsTransaction[] = members
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
@@ -1186,6 +1188,13 @@ function SavingsPage({
               <strong>{formatCurrency(overallSavings)}</strong>
             </div>
           )}
+        </article>
+        <article className="panel stat-panel available-funds-card">
+          <div className="mini-header">
+            <span>Available funds</span>
+            <strong>{formatCurrency(availableFunds)}</strong>
+          </div>
+          <small>Total savings less loan proceeds</small>
         </article>
         {savingsPlans.map((goal) => (
           <article
@@ -1561,6 +1570,7 @@ function SavingsPage({
 function LoansPage({
   borrowers,
   guarantors,
+  availableFunds,
   isAdmin,
   onAddBorrower,
   onAddBorrowerInterest,
@@ -1574,6 +1584,7 @@ function LoansPage({
 }: {
   borrowers: Borrower[]
   guarantors: string[]
+  availableFunds: number
   isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string, date: string) => void
@@ -1616,6 +1627,7 @@ function LoansPage({
   const [clearConfirmationText, setClearConfirmationText] = useState('')
   const [clearLoansError, setClearLoansError] = useState('')
   const [isClearingLoans, setIsClearingLoans] = useState(false)
+  const availableFundsCents = Math.max(0, Math.round(availableFunds * 100))
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
@@ -1670,6 +1682,19 @@ function LoansPage({
       setBorrowerError('Enter a loan amount greater than zero.')
       return
     }
+    const loanAmountCents = Math.round(loanAmount * 100)
+    if (!Number.isSafeInteger(loanAmountCents) || loanAmountCents <= 0) {
+      setBorrowerError('Enter a valid loan amount of at least 0.01.')
+      return
+    }
+    if (availableFundsCents <= 0) {
+      setBorrowerError('No available funds to issue a loan.')
+      return
+    }
+    if (loanAmountCents > availableFundsCents) {
+      setBorrowerError(`Loan amount cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
+      return
+    }
     if (borrowerInterestRate === '' || !Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100) {
       setBorrowerError('Enter an interest rate from 0 to 100 percent.')
       return
@@ -1680,14 +1705,14 @@ function LoansPage({
       name,
       guarantorName,
       email: '',
-      loanAmount,
+      loanAmount: loanAmountCents / 100,
       interestRate,
       paydayInterest: 0,
       createdAt: new Date().toISOString(),
       transactions: [{
         id: crypto.randomUUID(),
         type: 'loan',
-        amount: loanAmount,
+        amount: loanAmountCents / 100,
         date: getLocalDate(),
       }],
     })
@@ -1804,8 +1829,16 @@ function LoansPage({
       return
     }
     const roundedAmount = Number(amount.toFixed(2))
-    if (roundedAmount <= 0) {
+    if (!Number.isFinite(roundedAmount) || roundedAmount <= 0) {
       setPrincipalAdditionError('Enter an amount of at least 0.01.')
+      return
+    }
+    if (availableFundsCents <= 0) {
+      setPrincipalAdditionError('No available funds to add to this loan.')
+      return
+    }
+    if (Math.round(roundedAmount * 100) > availableFundsCents) {
+      setPrincipalAdditionError(`Amount cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
       return
     }
 
@@ -1830,6 +1863,11 @@ function LoansPage({
     }
     if (roundedAmount === Number(borrower.loanAmount.toFixed(2))) {
       setPrincipalEditError('Enter a principal amount different from the current value.')
+      return
+    }
+    const principalIncreaseCents = Math.round((roundedAmount - borrower.loanAmount) * 100)
+    if (principalIncreaseCents > availableFundsCents) {
+      setPrincipalEditError(`A principal increase cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
       return
     }
     onEditBorrowerPrincipal(borrower.id, roundedAmount, principalEditReason.trim(), getLocalDate())
@@ -1919,14 +1957,19 @@ function LoansPage({
               step="any"
               required
               value={borrowerLoanAmount}
+              max={availableFundsCents / 100}
               onChange={(event) => {
                 setBorrowerLoanAmount(event.target.value)
                 setBorrowerError('')
               }}
               placeholder="0"
             />
+            <small>Available funds: {formatCurrency(availableFundsCents / 100)}</small>
           </label>
-          <button type="submit" className="primary-button">Save borrower</button>
+          <button type="submit" className="primary-button" disabled={availableFundsCents <= 0}>Save borrower</button>
+          {availableFundsCents <= 0 && (
+            <p className="member-error" role="alert">No available funds to issue a loan.</p>
+          )}
           {guarantors.length === 0 && (
             <p className="member-error" role="alert">No registered members are available to select as a guarantor.</p>
           )}
@@ -2264,6 +2307,7 @@ function LoansPage({
                       <input
                         type="number"
                         min="0"
+                        max={(Math.round(borrower.loanAmount * 100) + availableFundsCents) / 100}
                         step="0.01"
                         required
                         value={editedPrincipalAmount}
@@ -2324,6 +2368,7 @@ function LoansPage({
                       <input
                         type="number"
                         min="0.01"
+                        max={availableFundsCents / 100}
                         step="any"
                         required
                         value={principalAdditionAmount}
@@ -2333,8 +2378,12 @@ function LoansPage({
                         }}
                         placeholder="0"
                       />
+                      <small>Available funds: {formatCurrency(availableFundsCents / 100)}</small>
                     </label>
-                    <button type="submit" className="primary-button">Add principal</button>
+                    <button type="submit" className="primary-button" disabled={availableFundsCents <= 0}>Add principal</button>
+                    {availableFundsCents <= 0 && (
+                      <p className="member-error" role="alert">No available funds to add to this loan.</p>
+                    )}
                     <button
                       type="button"
                       className="secondary-button"
@@ -3972,6 +4021,7 @@ function AccountPage({ name, email }: { name: string; email: string }) {
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview')
   const [isDarkMode, setIsDarkMode] = useState(false)
+  const [isIntroVisible, setIsIntroVisible] = useState(false)
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const [isRegisterMode, setIsRegisterMode] = useState(false)
   const [loginMessage, setLoginMessage] = useState('')
@@ -4076,6 +4126,7 @@ function App() {
   }
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const availableFunds = totalSavings - totalLoanProceeds
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
   const totalOtherProfit = otherProfits.reduce((total, profit) => total + profit.amount, 0)
   const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, currentYear)
@@ -4096,7 +4147,13 @@ function App() {
     member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
   )
 
-    useEffect(() => {
+  useEffect(() => {
+    if (!isIntroVisible) return
+    const introTimeout = window.setTimeout(() => setIsIntroVisible(false), 1800)
+    return () => window.clearTimeout(introTimeout)
+  }, [isIntroVisible])
+
+  useEffect(() => {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
   }, [isDarkMode])
 
@@ -4376,6 +4433,7 @@ function App() {
       setActiveTab('overview')
       setLoginMessage('')
       setIsLoginOpen(false)
+      setIsIntroVisible(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setLoginMessage('Folder selection cancelled. Choose a database folder to continue registering or signing in.')
@@ -5277,6 +5335,7 @@ function App() {
           <LoansPage
             borrowers={borrowers}
             guarantors={registeredGuarantors}
+            availableFunds={availableFunds}
             isAdmin={false}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
@@ -5335,6 +5394,7 @@ function App() {
           <LoansPage
             borrowers={borrowers}
             guarantors={registeredGuarantors}
+            availableFunds={availableFunds}
             isAdmin={signedInRole === 'admin'}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
@@ -5405,6 +5465,25 @@ function App() {
 
   return (
     <div className="app-shell" data-theme={isDarkMode ? 'dark' : 'light'}>
+      {isIntroVisible && createPortal(
+        <div className="intro-overlay" data-theme={isDarkMode ? 'dark' : 'light'} aria-hidden="true">
+          <div className="intro-content">
+            <div className="intro-mark">
+              <svg viewBox="0 0 64 64" fill="none">
+                <circle cx="32" cy="32" r="28" />
+                <path d="M20 39V30M31 39V24M42 39V18" />
+                <path d="m18 23 11-7 9 4 9-9" />
+                <path d="M39 11h8v8" />
+              </svg>
+            </div>
+            <p className="intro-eyebrow">WELCOME TO</p>
+            <h1>Funds Organizer</h1>
+            <p className="intro-tagline">Your money, in harmony.</p>
+            <span className="intro-progress" />
+          </div>
+        </div>,
+        document.body,
+      )}
       <button
         type="button"
         className="theme-toggle"
@@ -5482,7 +5561,9 @@ function App() {
               )}
             </div>
           </header>
-          {renderPage()}
+          <div key={activeTab} className="tab-transition">
+            {renderPage()}
+          </div>
         </>
       ) : (
         <main className="auth-locked-screen" aria-label="Sign in required">
