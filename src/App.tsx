@@ -1036,8 +1036,8 @@ function SavingsPage({
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
   const [isSavingsSummaryExpanded, setIsSavingsSummaryExpanded] = useState(true)
-  const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(true)
-  const [collapsedMemberSavingsTransactions, setCollapsedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
+  const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(false)
+  const [expandedMemberSavingsTransactions, setExpandedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
@@ -1470,7 +1470,7 @@ function SavingsPage({
           filteredMembers.length > 0 ? (
             <ul className="savings-directory-list">
               {filteredMembers.map((member, index) => {
-                const isMemberTransactionsExpanded = !collapsedMemberSavingsTransactions.has(member.name)
+                const isMemberTransactionsExpanded = expandedMemberSavingsTransactions.has(member.name)
                 const memberTransactionsId = `member-savings-transactions-${index}`
                 return (
                 <li key={member.name} className="savings-directory-item">
@@ -1627,7 +1627,7 @@ function SavingsPage({
                         aria-label={`${isMemberTransactionsExpanded ? 'Collapse' : 'Expand'} ${member.name} savings transactions`}
                         aria-expanded={isMemberTransactionsExpanded}
                         aria-controls={memberTransactionsId}
-                        onClick={() => setCollapsedMemberSavingsTransactions((current) => {
+                        onClick={() => setExpandedMemberSavingsTransactions((current) => {
                           const next = new Set(current)
                           if (next.has(member.name)) next.delete(member.name)
                           else next.add(member.name)
