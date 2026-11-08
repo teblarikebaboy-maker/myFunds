@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   chooseDatabaseDirectory,
@@ -68,15 +68,20 @@ const getSavingsAdjustmentTotal = (member: Member) =>
   )
 
 const getMemberSavings = (member: Member) =>
-  member.initialSavings
-  + member.contributions.reduce((total, contribution) => total + contribution.amount, 0)
+  (member.excludedSavingsDates?.includes(member.initialSavingsDate) ? 0 : member.initialSavings)
+  + member.contributions
+    .filter((contribution) => !member.excludedSavingsDates?.includes(contribution.date))
+    .reduce((total, contribution) => total + contribution.amount, 0)
   - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
   + getSavingsAdjustmentTotal(member)
 
 const getMemberProfitShareSavings = (member: Member) =>
-  Math.max(0, member.initialSavings
+  Math.max(0, (member.excludedSavingsDates?.includes(member.initialSavingsDate) ? 0 : member.initialSavings)
     + member.contributions
-      .filter((contribution) => contribution.source !== 'member profit')
+      .filter((contribution) =>
+        contribution.source !== 'member profit'
+        && !member.excludedSavingsDates?.includes(contribution.date),
+      )
       .reduce((total, contribution) => total + contribution.amount, 0)
     - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
     + getSavingsAdjustmentTotal(member))
@@ -188,6 +193,10 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
 
 const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[]) => {
   const members = currentMembers.map((member) => ({ ...member }))
+  const excludedSavingsDates = new Set(members.flatMap((member) => member.excludedSavingsDates ?? []))
+  members.forEach((member) => {
+    member.excludedSavingsDates = [...excludedSavingsDates]
+  })
 
   accounts.forEach((account) => {
     const normalizedEmail = account.email.trim().toLowerCase()
@@ -220,6 +229,7 @@ const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[
       contributions: [],
       withdrawals: [],
       adjustments: [],
+      excludedSavingsDates: [...excludedSavingsDates],
     })
   })
 
@@ -398,6 +408,17 @@ const formatCurrency = (amount: number) =>
 
 const formatSavingsSummaryAmount = (amountCents: number) =>
   new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(amountCents / 100)
+
+const savingsSummaryYear = 2027
+const getSavingsScheduleDates = () => {
+  const dates = ['2026-12-30']
+  for (let month = 0; month < 12; month += 1) {
+    const monthPrefix = `${savingsSummaryYear}-${String(month + 1).padStart(2, '0')}`
+    dates.push(`${monthPrefix}-15`)
+    dates.push(`${monthPrefix}-${month === 1 ? '28' : '30'}`)
+  }
+  return dates
+}
 
 const formatBorrowerCurrency = (amount: number) =>
   new Intl.NumberFormat('en-PH', {
@@ -774,6 +795,7 @@ type SavingsPageProps = {
   canEditSavings: boolean
   overallSavings: number
   onMemberChange: (member: string) => void
+  onToggleSavingsDate: (date: string, excluded: boolean) => void
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
   onEditMemberSavings: (memberName: string, amount: number, reason: string, date: string) => void
@@ -989,6 +1011,7 @@ function SavingsPage({
   canEditSavings,
   overallSavings,
   onMemberChange,
+  onToggleSavingsDate,
   onAddSavings,
   onPullOutSavings,
   onEditMemberSavings,
@@ -997,6 +1020,7 @@ function SavingsPage({
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
+  const [isSavingsSummaryExpanded, setIsSavingsSummaryExpanded] = useState(true)
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
@@ -1150,7 +1174,7 @@ function SavingsPage({
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
     .flatMap(getMemberSavingsTransactions)
     .sort((first, second) => second.date.localeCompare(first.date))
-  const monthlySavingsByMember = new Map<string, Map<string, number>>()
+  const savingsByDateAndMember = new Map<string, Map<string, number>>()
   members.forEach((member) => {
     const deposits = [
       ...(member.initialSavings > 0
@@ -1160,30 +1184,37 @@ function SavingsPage({
     ]
 
     deposits.forEach(({ amount, date }) => {
-      const month = /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date) ? date.slice(0, 7) : ''
-      if (!month) return
+      if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
+      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2026-12-30') return
 
-      const savingsByMember = monthlySavingsByMember.get(month) ?? new Map<string, number>()
+      const savingsByMember = savingsByDateAndMember.get(date) ?? new Map<string, number>()
       savingsByMember.set(
         member.name,
         (savingsByMember.get(member.name) ?? 0) + Math.round(amount * 100),
       )
-      monthlySavingsByMember.set(month, savingsByMember)
+      savingsByDateAndMember.set(date, savingsByMember)
     })
   })
-  const recordedSavingsMonths = [...monthlySavingsByMember.keys()].sort()
-  const monthlySavingsRows: Array<{ month: string; amounts: Map<string, number> }> = []
-  if (recordedSavingsMonths.length > 0) {
-    const [startYear, startMonth] = recordedSavingsMonths[0].split('-').map(Number)
-    const [endYear, endMonth] = recordedSavingsMonths[recordedSavingsMonths.length - 1].split('-').map(Number)
-    const monthCount = (endYear - startYear) * 12 + endMonth - startMonth
-
-    for (let offset = 0; offset <= monthCount; offset += 1) {
-      const currentMonth = new Date(Date.UTC(startYear, startMonth - 1 + offset, 1))
-      const month = `${currentMonth.getUTCFullYear()}-${String(currentMonth.getUTCMonth() + 1).padStart(2, '0')}`
-      monthlySavingsRows.push({ month, amounts: monthlySavingsByMember.get(month) ?? new Map() })
-    }
-  }
+  const savingsScheduleDates = [...new Set([
+    ...getSavingsScheduleDates(),
+    ...savingsByDateAndMember.keys(),
+  ])].sort()
+  const savingsScheduleRows = savingsScheduleDates.map((date) => ({
+    date,
+    amounts: savingsByDateAndMember.get(date) ?? new Map<string, number>(),
+  }))
+  const firstHalfRows = savingsScheduleRows.filter(({ date }) => date < `${savingsSummaryYear}-06-01`)
+  const secondHalfRows = savingsScheduleRows.filter(({ date }) => date >= `${savingsSummaryYear}-06-01`)
+  const savingsSummarySections = [
+    { label: '1st Half', rows: firstHalfRows },
+    { label: '2nd Half', rows: secondHalfRows },
+  ]
+  const isSavingsDateExcluded = (date: string) =>
+    members.length > 0 && members.every((member) => member.excludedSavingsDates?.includes(date))
+  const getSavingsScheduleTotal = (rows: typeof savingsScheduleRows, memberName: string) =>
+    rows.reduce((total, row) =>
+      total + (isSavingsDateExcluded(row.date) ? 0 : row.amounts.get(memberName) ?? 0),
+    0)
 
   return (
     <main className="page-view">
@@ -1263,40 +1294,89 @@ function SavingsPage({
         <div className="panel-header">
           <div>
             <p className="eyebrow">Savings Summary</p>
-            <h3>Monthly savings added</h3>
+            <h3>Savings contribution schedule</h3>
           </div>
+          <button
+            type="button"
+            className="secondary-button savings-summary-toggle"
+            aria-label={isSavingsSummaryExpanded ? 'Collapse savings summary' : 'Expand savings summary'}
+            aria-expanded={isSavingsSummaryExpanded}
+            aria-controls="savings-summary-content"
+            onClick={() => setIsSavingsSummaryExpanded((expanded) => !expanded)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className={isSavingsSummaryExpanded ? 'expanded' : ''}
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
         </div>
-        {monthlySavingsRows.length > 0 ? (
-          <div className="monthly-savings-table-wrap">
-            <table className="monthly-savings-table">
-              <thead>
-                <tr>
-                  <th scope="col">Date</th>
-                  {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {monthlySavingsRows.map(({ month, amounts }) => {
-                  const [year, monthNumber] = month.split('-').map(Number)
-                  const monthLabel = new Date(Date.UTC(year, monthNumber - 1, 1))
-                    .toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
-                  return (
-                    <tr key={month}>
-                      <th scope="row">{monthLabel}-{String(year).slice(-2)}</th>
-                      {members.map((member) => (
-                        <td key={member.name}>
-                          {formatSavingsSummaryAmount(amounts.get(member.name) ?? 0)}
-                        </td>
-                      ))}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="savings-history-empty">No savings deposits recorded yet.</p>
-        )}
+        <div id="savings-summary-content" hidden={!isSavingsSummaryExpanded}>
+          {members.length > 0 ? (
+            <div className="monthly-savings-table-wrap">
+              <table className="monthly-savings-table">
+                <tbody>
+                  {savingsSummarySections.map(({ label, rows }, sectionIndex) => (
+                    <Fragment key={label}>
+                      <tr className="savings-summary-half-row">
+                        <th scope="rowgroup" colSpan={members.length + 1}>{label}</th>
+                      </tr>
+                      <tr className="savings-summary-year-row">
+                        <th scope="rowgroup" colSpan={members.length + 1}>{savingsSummaryYear}</th>
+                      </tr>
+                      {sectionIndex === 0 && (
+                        <tr className="savings-summary-column-row">
+                          <th scope="col">Date</th>
+                          {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
+                        </tr>
+                      )}
+                      {rows.map(({ date, amounts }) => {
+                        const dateLabel = new Date(`${date}T00:00:00Z`)
+                          .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' })
+                          .replace(' ', '-')
+                        return (
+                          <tr key={date} className={isSavingsDateExcluded(date) ? 'savings-summary-excluded-row' : undefined}>
+                            <th scope="row">
+                              {isAdmin && (
+                                <input
+                                  className="savings-summary-exclusion-checkbox"
+                                  type="checkbox"
+                                  aria-label={`Exclude ${dateLabel} ${date.slice(0, 4)} from savings totals`}
+                                  checked={isSavingsDateExcluded(date)}
+                                  onChange={(event) => onToggleSavingsDate(date, event.target.checked)}
+                                />
+                              )}
+                              <span className="savings-summary-row-value">{dateLabel}</span>
+                            </th>
+                            {members.map((member) => (
+                              <td key={member.name}>
+                                <span className="savings-summary-row-value">
+                                  {formatSavingsSummaryAmount(amounts.get(member.name) ?? 0)}
+                                </span>
+                              </td>
+                            ))}
+                          </tr>
+                        )
+                      })}
+                      <tr className="savings-summary-total-row">
+                        <th scope="row">TOTAL</th>
+                        {members.map((member) => (
+                          <td key={member.name}>
+                            {formatSavingsSummaryAmount(getSavingsScheduleTotal(rows, member.name))}
+                          </td>
+                        ))}
+                      </tr>
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="savings-history-empty">Add members to view the savings schedule.</p>
+          )}
+        </div>
       </section>
 
       <section className="panel full-width-panel savings-directory-panel">
@@ -4617,6 +4697,17 @@ function App() {
     )
   }
 
+  const toggleSavingsDateExclusion = (date: string, excluded: boolean) => {
+    if (signedInRole !== 'admin' || !/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
+    rememberTransactionUndo('savings summary exclusion')
+    setMembers((currentMembers) => currentMembers.map((member) => {
+      const excludedDates = new Set(member.excludedSavingsDates ?? [])
+      if (excluded) excludedDates.add(date)
+      else excludedDates.delete(date)
+      return { ...member, excludedSavingsDates: [...excludedDates] }
+    }))
+  }
+
   const addOtherProfit = (profit: OtherProfit) => {
     if (signedInRole !== 'admin') return
     rememberTransactionUndo('other profit')
@@ -4672,6 +4763,7 @@ function App() {
       contributions: [],
       withdrawals: [],
       adjustments: [],
+      excludedSavingsDates: [...new Set(members.flatMap((existingMember) => existingMember.excludedSavingsDates ?? []))],
     }
     const updatedMembers = [...members, member]
     const updatedAccounts = [...accounts, account]
@@ -5468,6 +5560,7 @@ function App() {
             canEditSavings={Boolean(signedInMember)}
             overallSavings={totalSavings}
             onMemberChange={() => undefined}
+            onToggleSavingsDate={() => undefined}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}
@@ -5528,6 +5621,7 @@ function App() {
             isAdmin
             canEditSavings
             onMemberChange={setSelectedMember}
+            onToggleSavingsDate={toggleSavingsDateExclusion}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}

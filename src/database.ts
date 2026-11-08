@@ -27,6 +27,7 @@ export type Member = {
   contributions: SavingsContribution[]
   withdrawals: SavingsWithdrawal[]
   adjustments?: SavingsAdjustment[]
+  excludedSavingsDates?: string[]
 }
 export type AccountRole = 'admin' | 'member'
 export type DatabaseAccount = {
@@ -408,6 +409,19 @@ export const readWorkbookData = async (
       withdrawals: [],
       adjustments: [],
       accountEmail: String(row.getCell(4).value ?? '').trim().toLowerCase() || undefined,
+      excludedSavingsDates: (() => {
+        const savedDates = String(row.getCell(5).value ?? '').trim()
+        if (!savedDates) return []
+        try {
+          const parsed: unknown = JSON.parse(savedDates)
+          return Array.isArray(parsed)
+            ? parsed.filter((date): date is string =>
+              typeof date === 'string' && /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date))
+            : []
+        } catch {
+          return []
+        }
+      })(),
     })
   })
 
@@ -781,12 +795,13 @@ export const writeWorkbookData = async (
   workbook.creator = 'Funds Organizer'
 
   const membersSheet = workbook.addWorksheet('Members')
-  membersSheet.addRow(['Name', 'Initial Savings', 'Initial Savings Date', 'Account Email'])
+  membersSheet.addRow(['Name', 'Initial Savings', 'Initial Savings Date', 'Account Email', 'Excluded Savings Dates'])
   members.forEach((member) => membersSheet.addRow([
     member.name,
     member.initialSavings,
     member.initialSavingsDate,
     member.accountEmail ?? '',
+    JSON.stringify(member.excludedSavingsDates ?? []),
   ]))
 
   const contributionsSheet = workbook.addWorksheet('Contributions')
