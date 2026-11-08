@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   chooseDatabaseDirectory,
@@ -55,6 +55,15 @@ type SavingsTransaction = {
   previousAmount?: number
   newAmount?: number
 }
+type TransactionUndoSnapshot = {
+  members: Member[]
+  accounts: DatabaseAccount[]
+  borrowers: Borrower[]
+  removedBorrowerTransactions: RemovedBorrowerTransaction[]
+  profitTransfers: ProfitTransfer[]
+  otherProfits: OtherProfit[]
+  profitCashouts: ProfitCashout[]
+}
 type AppDataSnapshot = {
   members: Member[]
   accounts: DatabaseAccount[]
@@ -67,7 +76,6 @@ type AppDataSnapshot = {
   deletedProfitTransactions: DeletedProfitTransaction[]
   deletedLoans: DeletedLoanRecord[]
 }
-
 const getSavingsAdjustmentTotal = (member: Member) =>
   (member.adjustments ?? []).reduce(
     (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
@@ -75,15 +83,20 @@ const getSavingsAdjustmentTotal = (member: Member) =>
   )
 
 const getMemberSavings = (member: Member) =>
-  member.initialSavings
-  + member.contributions.reduce((total, contribution) => total + contribution.amount, 0)
+  (member.excludedSavingsDates?.includes(member.initialSavingsDate) ? 0 : member.initialSavings)
+  + member.contributions
+    .filter((contribution) => !member.excludedSavingsDates?.includes(contribution.date))
+    .reduce((total, contribution) => total + contribution.amount, 0)
   - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
   + getSavingsAdjustmentTotal(member)
 
 const getMemberProfitShareSavings = (member: Member) =>
-  Math.max(0, member.initialSavings
+  Math.max(0, (member.excludedSavingsDates?.includes(member.initialSavingsDate) ? 0 : member.initialSavings)
     + member.contributions
-      .filter((contribution) => contribution.source !== 'member profit')
+      .filter((contribution) =>
+        contribution.source !== 'member profit'
+        && !member.excludedSavingsDates?.includes(contribution.date),
+      )
       .reduce((total, contribution) => total + contribution.amount, 0)
     - member.withdrawals.reduce((total, withdrawal) => total + withdrawal.amount, 0)
     + getSavingsAdjustmentTotal(member))
@@ -195,6 +208,10 @@ const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
 
 const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[]) => {
   const members = currentMembers.map((member) => ({ ...member }))
+  const excludedSavingsDates = new Set(members.flatMap((member) => member.excludedSavingsDates ?? []))
+  members.forEach((member) => {
+    member.excludedSavingsDates = [...excludedSavingsDates]
+  })
 
   accounts.forEach((account) => {
     const normalizedEmail = account.email.trim().toLowerCase()
@@ -227,6 +244,7 @@ const syncAccountMembers = (accounts: DatabaseAccount[], currentMembers: Member[
       contributions: [],
       withdrawals: [],
       adjustments: [],
+      excludedSavingsDates: [...excludedSavingsDates],
     })
   })
 
@@ -402,6 +420,20 @@ const formatCurrency = (amount: number) =>
     currency: 'PHP',
     maximumFractionDigits: 0,
   }).format(amount)
+
+const formatSavingsSummaryAmount = (amountCents: number) =>
+  new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(amountCents / 100)
+
+const savingsSummaryYear = 2027
+const getSavingsScheduleDates = () => {
+  const dates = ['2026-12-30']
+  for (let month = 0; month < 12; month += 1) {
+    const monthPrefix = `${savingsSummaryYear}-${String(month + 1).padStart(2, '0')}`
+    dates.push(`${monthPrefix}-15`)
+    if (month < 11) dates.push(`${monthPrefix}-${month === 1 ? '28' : '30'}`)
+  }
+  return dates
+}
 
 const formatBorrowerCurrency = (amount: number) =>
   new Intl.NumberFormat('en-PH', {
@@ -778,6 +810,7 @@ type SavingsPageProps = {
   canEditSavings: boolean
   overallSavings: number
   onMemberChange: (member: string) => void
+  onToggleSavingsDate: (date: string, excluded: boolean) => void
   onAddSavings: (memberName: string, amount: number, date: string) => void
   onPullOutSavings: (memberName: string, amount: number, date: string, reason: string) => void
   onEditMemberSavings: (memberName: string, amount: number, reason: string, date: string) => void
@@ -993,6 +1026,7 @@ function SavingsPage({
   canEditSavings,
   overallSavings,
   onMemberChange,
+  onToggleSavingsDate,
   onAddSavings,
   onPullOutSavings,
   onEditMemberSavings,
@@ -1001,6 +1035,9 @@ function SavingsPage({
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
+  const [isSavingsSummaryExpanded, setIsSavingsSummaryExpanded] = useState(true)
+  const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(true)
+  const [collapsedMemberSavingsTransactions, setCollapsedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
@@ -1147,11 +1184,55 @@ function SavingsPage({
     .reduce((total, member) => total + getMemberSavings(member), 0)
   const selectedMemberDetails = members.find((member) => member.name === selectedMember)
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
+  const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const availableFunds = overallSavings - totalLoanProceeds
   const getSavingsShare = (member: Member) => totalSavings > 0 ? (getMemberSavings(member) / totalSavings) * 100 : 0
   const savingsHistory: SavingsTransaction[] = members
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
     .flatMap(getMemberSavingsTransactions)
     .sort((first, second) => second.date.localeCompare(first.date))
+  const savingsByDateAndMember = new Map<string, Map<string, number>>()
+  members.forEach((member) => {
+    const deposits = [
+      ...(member.initialSavings > 0
+        ? [{ amount: member.initialSavings, date: member.initialSavingsDate }]
+        : []),
+      ...member.contributions.filter((contribution) => contribution.amount > 0),
+    ]
+
+    deposits.forEach(({ amount, date }) => {
+      if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
+      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2026-12-30') return
+      if (date === `${savingsSummaryYear}-12-30`) return
+
+      const savingsByMember = savingsByDateAndMember.get(date) ?? new Map<string, number>()
+      savingsByMember.set(
+        member.name,
+        (savingsByMember.get(member.name) ?? 0) + Math.round(amount * 100),
+      )
+      savingsByDateAndMember.set(date, savingsByMember)
+    })
+  })
+  const savingsScheduleDates = [...new Set([
+    ...getSavingsScheduleDates(),
+    ...savingsByDateAndMember.keys(),
+  ])].sort()
+  const savingsScheduleRows = savingsScheduleDates.map((date) => ({
+    date,
+    amounts: savingsByDateAndMember.get(date) ?? new Map<string, number>(),
+  }))
+  const firstHalfRows = savingsScheduleRows.filter(({ date }) => date < `${savingsSummaryYear}-06-01`)
+  const secondHalfRows = savingsScheduleRows.filter(({ date }) => date >= `${savingsSummaryYear}-06-01`)
+  const savingsSummarySections = [
+    { label: '1st Half', rows: firstHalfRows },
+    { label: '2nd Half', rows: secondHalfRows },
+  ]
+  const isSavingsDateExcluded = (date: string) =>
+    members.length > 0 && members.every((member) => member.excludedSavingsDates?.includes(date))
+  const getSavingsScheduleTotal = (rows: typeof savingsScheduleRows, memberName: string) =>
+    rows.reduce((total, row) =>
+      total + (isSavingsDateExcluded(row.date) ? 0 : row.amounts.get(memberName) ?? 0),
+    0)
 
   return (
     <main className="page-view">
@@ -1194,6 +1275,13 @@ function SavingsPage({
             </div>
           )}
         </article>
+        <article className="panel stat-panel available-funds-card">
+          <div className="mini-header">
+            <span>Available funds</span>
+            <strong>{formatCurrency(availableFunds)}</strong>
+          </div>
+          <small>Total savings less loan proceeds</small>
+        </article>
         {savingsPlans.map((goal) => (
           <article
             key={goal.name}
@@ -1218,6 +1306,95 @@ function SavingsPage({
             <small>{goal.target} target</small>
           </article>
         ))}
+      </section>
+
+      <section className="panel full-width-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Savings Summary</p>
+            <h3>Savings contribution schedule</h3>
+          </div>
+          <button
+            type="button"
+            className="secondary-button savings-summary-toggle"
+            aria-label={isSavingsSummaryExpanded ? 'Collapse savings summary' : 'Expand savings summary'}
+            aria-expanded={isSavingsSummaryExpanded}
+            aria-controls="savings-summary-content"
+            onClick={() => setIsSavingsSummaryExpanded((expanded) => !expanded)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className={isSavingsSummaryExpanded ? 'expanded' : ''}
+            >
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+        </div>
+        <div id="savings-summary-content" hidden={!isSavingsSummaryExpanded}>
+          {members.length > 0 ? (
+            <div className="monthly-savings-table-wrap">
+              <table className="monthly-savings-table">
+                <tbody>
+                  {savingsSummarySections.map(({ label, rows }, sectionIndex) => (
+                    <Fragment key={label}>
+                      <tr className="savings-summary-half-row">
+                        <th scope="rowgroup" colSpan={members.length + 1}>{label}</th>
+                      </tr>
+                      <tr className="savings-summary-year-row">
+                        <th scope="rowgroup" colSpan={members.length + 1}>{savingsSummaryYear}</th>
+                      </tr>
+                      {sectionIndex === 0 && (
+                        <tr className="savings-summary-column-row">
+                          <th scope="col">Date</th>
+                          {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
+                        </tr>
+                      )}
+                      {rows.map(({ date, amounts }) => {
+                        const dateLabel = new Date(`${date}T00:00:00Z`)
+                          .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' })
+                          .replace(' ', '-')
+                        return (
+                          <tr key={date} className={isSavingsDateExcluded(date) ? 'savings-summary-excluded-row' : undefined}>
+                            <th scope="row">
+                              {isAdmin && (
+                                <input
+                                  className="savings-summary-exclusion-checkbox"
+                                  type="checkbox"
+                                  aria-label={`Exclude ${dateLabel} ${date.slice(0, 4)} from savings totals`}
+                                  checked={isSavingsDateExcluded(date)}
+                                  onChange={(event) => onToggleSavingsDate(date, event.target.checked)}
+                                />
+                              )}
+                              <span className="savings-summary-row-value">{dateLabel}</span>
+                            </th>
+                            {members.map((member) => (
+                              <td key={member.name}>
+                                <span className="savings-summary-row-value">
+                                  {formatSavingsSummaryAmount(amounts.get(member.name) ?? 0)}
+                                </span>
+                              </td>
+                            ))}
+                          </tr>
+                        )
+                      })}
+                      <tr className="savings-summary-total-row">
+                        <th scope="row">TOTAL</th>
+                        {members.map((member) => (
+                          <td key={member.name}>
+                            {formatSavingsSummaryAmount(getSavingsScheduleTotal(rows, member.name))}
+                          </td>
+                        ))}
+                      </tr>
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="savings-history-empty">Add members to view the savings schedule.</p>
+          )}
+        </div>
       </section>
 
       <section className="panel full-width-panel savings-directory-panel">
@@ -1292,7 +1469,10 @@ function SavingsPage({
         {members.length > 0 ? (
           filteredMembers.length > 0 ? (
             <ul className="savings-directory-list">
-              {filteredMembers.map((member) => (
+              {filteredMembers.map((member, index) => {
+                const isMemberTransactionsExpanded = !collapsedMemberSavingsTransactions.has(member.name)
+                const memberTransactionsId = `member-savings-transactions-${index}`
+                return (
                 <li key={member.name} className="savings-directory-item">
                   <div className="savings-member-header">
                     <strong>{member.name}</strong>
@@ -1439,29 +1619,51 @@ function SavingsPage({
                     </form>
                   )}
                   <div className="savings-member-transactions">
-                    <h4>Savings transactions</h4>
-                    <ul>
-                      {getMemberSavingsTransactions(member).map((transaction) => (
-                        <li key={transaction.id}>
-                          <div>
-                            <strong>{transaction.type}</strong>
-                            <small>
-                              {formatDate(transaction.date)}
-                              {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
-                              {transaction.reason && ` · ${transaction.reason}`}
-                              {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                                && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
-                            </small>
-                          </div>
-                          <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                            {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="savings-member-transactions-header">
+                      <h4>Savings transactions</h4>
+                      <button
+                        type="button"
+                        className="secondary-button savings-summary-toggle"
+                        aria-label={`${isMemberTransactionsExpanded ? 'Collapse' : 'Expand'} ${member.name} savings transactions`}
+                        aria-expanded={isMemberTransactionsExpanded}
+                        aria-controls={memberTransactionsId}
+                        onClick={() => setCollapsedMemberSavingsTransactions((current) => {
+                          const next = new Set(current)
+                          if (next.has(member.name)) next.delete(member.name)
+                          else next.add(member.name)
+                          return next
+                        })}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" className={isMemberTransactionsExpanded ? 'expanded' : ''}>
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div id={memberTransactionsId} hidden={!isMemberTransactionsExpanded}>
+                      <ul>
+                        {getMemberSavingsTransactions(member).map((transaction) => (
+                          <li key={transaction.id}>
+                            <div>
+                              <strong>{transaction.type}</strong>
+                              <small>
+                                {formatDate(transaction.date)}
+                                {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
+                                {transaction.reason && ` · ${transaction.reason}`}
+                                {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                  && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                              </small>
+                            </div>
+                            <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                              {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           ) : (
             <p className="savings-history-empty">No members match “{memberSearch}”.</p>
@@ -1477,6 +1679,7 @@ function SavingsPage({
             <p className="eyebrow">Savings History</p>
             <h3>Savings transactions</h3>
           </div>
+          <div className="savings-history-header-actions">
           {isAdmin && (isClearConfirmationOpen ? (
             <form
               className="clear-loans-form clear-savings-form"
@@ -1536,30 +1739,45 @@ function SavingsPage({
               Clear all data
             </button>
           ))}
+            <button
+              type="button"
+              className="secondary-button savings-summary-toggle"
+              aria-label={`${isSavingsHistoryExpanded ? 'Collapse' : 'Expand'} savings history`}
+              aria-expanded={isSavingsHistoryExpanded}
+              aria-controls="savings-history-content"
+              onClick={() => setIsSavingsHistoryExpanded((expanded) => !expanded)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className={isSavingsHistoryExpanded ? 'expanded' : ''}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-        {savingsHistory.length > 0 ? (
-          <ul className="transaction-list savings-history-list">
-            {savingsHistory.map((transaction) => (
-              <li key={transaction.id} className="transaction-item">
-                <div>
-                  <strong>{transaction.type} · {transaction.member}</strong>
-                  <small>
-                    {formatDate(transaction.date)}
-                    {transaction.reason && ` · ${transaction.reason}`}
-                    {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                      && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
-                    {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
-                  </small>
-                </div>
-                <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                  {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No savings transactions for this selection yet.</p>
-        )}
+        <div id="savings-history-content" hidden={!isSavingsHistoryExpanded}>
+          {savingsHistory.length > 0 ? (
+            <ul className="transaction-list savings-history-list">
+              {savingsHistory.map((transaction) => (
+                <li key={transaction.id} className="transaction-item">
+                  <div>
+                    <strong>{transaction.type} · {transaction.member}</strong>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                      {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
+                    </small>
+                  </div>
+                  <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                    {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No savings transactions for this selection yet.</p>
+          )}
+        </div>
       </section>
     </main>
   )
@@ -1568,6 +1786,7 @@ function SavingsPage({
 function LoansPage({
   borrowers,
   guarantors,
+  availableFunds,
   isAdmin,
   onAddBorrower,
   onAddBorrowerInterest,
@@ -1581,6 +1800,7 @@ function LoansPage({
 }: {
   borrowers: Borrower[]
   guarantors: string[]
+  availableFunds: number
   isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string, date: string) => void
@@ -1616,6 +1836,7 @@ function LoansPage({
   const [editedPrincipalAmount, setEditedPrincipalAmount] = useState('')
   const [principalEditReason, setPrincipalEditReason] = useState('')
   const [principalEditError, setPrincipalEditError] = useState('')
+  const [isLoanHistoryExpanded, setIsLoanHistoryExpanded] = useState(false)
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const [borrowerDirectoryFilter, setBorrowerDirectoryFilter] = useState<BorrowerDirectoryFilter>('all')
   const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
@@ -1623,6 +1844,7 @@ function LoansPage({
   const [clearConfirmationText, setClearConfirmationText] = useState('')
   const [clearLoansError, setClearLoansError] = useState('')
   const [isClearingLoans, setIsClearingLoans] = useState(false)
+  const availableFundsCents = Math.max(0, Math.round(availableFunds * 100))
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
@@ -1677,6 +1899,19 @@ function LoansPage({
       setBorrowerError('Enter a loan amount greater than zero.')
       return
     }
+    const loanAmountCents = Math.round(loanAmount * 100)
+    if (!Number.isSafeInteger(loanAmountCents) || loanAmountCents <= 0) {
+      setBorrowerError('Enter a valid loan amount of at least 0.01.')
+      return
+    }
+    if (availableFundsCents <= 0) {
+      setBorrowerError('No available funds to issue a loan.')
+      return
+    }
+    if (loanAmountCents > availableFundsCents) {
+      setBorrowerError(`Loan amount cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
+      return
+    }
     if (borrowerInterestRate === '' || !Number.isFinite(interestRate) || interestRate < 0 || interestRate > 100) {
       setBorrowerError('Enter an interest rate from 0 to 100 percent.')
       return
@@ -1687,14 +1922,14 @@ function LoansPage({
       name,
       guarantorName,
       email: '',
-      loanAmount,
+      loanAmount: loanAmountCents / 100,
       interestRate,
       paydayInterest: 0,
       createdAt: new Date().toISOString(),
       transactions: [{
         id: crypto.randomUUID(),
         type: 'loan',
-        amount: loanAmount,
+        amount: loanAmountCents / 100,
         date: getLocalDate(),
       }],
     })
@@ -1811,8 +2046,16 @@ function LoansPage({
       return
     }
     const roundedAmount = Number(amount.toFixed(2))
-    if (roundedAmount <= 0) {
+    if (!Number.isFinite(roundedAmount) || roundedAmount <= 0) {
       setPrincipalAdditionError('Enter an amount of at least 0.01.')
+      return
+    }
+    if (availableFundsCents <= 0) {
+      setPrincipalAdditionError('No available funds to add to this loan.')
+      return
+    }
+    if (Math.round(roundedAmount * 100) > availableFundsCents) {
+      setPrincipalAdditionError(`Amount cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
       return
     }
 
@@ -1837,6 +2080,11 @@ function LoansPage({
     }
     if (roundedAmount === Number(borrower.loanAmount.toFixed(2))) {
       setPrincipalEditError('Enter a principal amount different from the current value.')
+      return
+    }
+    const principalIncreaseCents = Math.round((roundedAmount - borrower.loanAmount) * 100)
+    if (principalIncreaseCents > availableFundsCents) {
+      setPrincipalEditError(`A principal increase cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
       return
     }
     onEditBorrowerPrincipal(borrower.id, roundedAmount, principalEditReason.trim(), getLocalDate())
@@ -1926,14 +2174,19 @@ function LoansPage({
               step="any"
               required
               value={borrowerLoanAmount}
+              max={availableFundsCents / 100}
               onChange={(event) => {
                 setBorrowerLoanAmount(event.target.value)
                 setBorrowerError('')
               }}
               placeholder="0"
             />
+            <small>Available funds: {formatCurrency(availableFundsCents / 100)}</small>
           </label>
-          <button type="submit" className="primary-button">Save borrower</button>
+          <button type="submit" className="primary-button" disabled={availableFundsCents <= 0}>Save borrower</button>
+          {availableFundsCents <= 0 && (
+            <p className="member-error" role="alert">No available funds to issue a loan.</p>
+          )}
           {guarantors.length === 0 && (
             <p className="member-error" role="alert">No registered members are available to select as a guarantor.</p>
           )}
@@ -2171,10 +2424,101 @@ function LoansPage({
                   </form>
                 )}
                 <div className="borrower-metrics">
-                  {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
-                  <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
-                  <span className="borrower-metric interest-metric"><strong>Rate:</strong> {borrower.interestRate}%</span>
-                  <span className="borrower-metric interest-metric"><strong>Interest:</strong> {formatBorrowerCurrency(borrower.paydayInterest)}</span>
+                  <div className="borrower-metric principal-metric">
+                    <span>Current Principal</span>
+                    <strong>{formatBorrowerCurrency(borrower.loanAmount)}</strong>
+                  </div>
+                  <div className="borrower-metric interest-metric">
+                    <span>Current Interest</span>
+                    <strong>{formatBorrowerCurrency(borrower.paydayInterest)}</strong>
+                  </div>
+                  <div className="borrower-metric received-interest-metric">
+                    <span>Received Interest</span>
+                    <strong>{formatBorrowerCurrency(
+                      borrower.transactions
+                        .filter((transaction) => transaction.type === 'interest-payment')
+                        .reduce((total, transaction) => total + transaction.amount, 0),
+                    )}</strong>
+                  </div>
+                </div>
+                <div className="borrower-ledger">
+                      <table className="borrower-ledger-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Principal</th>
+                            <th>Interest</th>
+                            <th>Pay Interest</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const ledgerRowsByDate = new Map<string, {
+                              id: string
+                              date: string
+                              principal: number
+                              interest: number
+                              payInterest: number
+                            }>()
+
+                            borrower.transactions.forEach((transaction) => {
+                              const existingRow = ledgerRowsByDate.get(transaction.date) ?? {
+                                id: transaction.date,
+                                date: transaction.date,
+                                principal: 0,
+                                interest: 0,
+                                payInterest: 0,
+                              }
+
+                              if (transaction.type === 'loan') {
+                                existingRow.principal += transaction.amount
+                              } else if (transaction.type === 'principal-payment') {
+                                existingRow.principal -= transaction.amount
+                              } else if (transaction.type === 'principal-addition') {
+                                existingRow.principal += transaction.amount
+                              } else if (transaction.type === 'principal-adjustment'
+                                && transaction.previousAmount !== undefined
+                                && transaction.newAmount !== undefined) {
+                                existingRow.principal += transaction.newAmount - transaction.previousAmount
+                              } else if (transaction.type === 'interest') {
+                                existingRow.interest += transaction.amount
+                              } else if (transaction.type === 'interest-payment') {
+                                existingRow.payInterest += transaction.amount
+                              }
+
+                              ledgerRowsByDate.set(transaction.date, existingRow)
+                            })
+
+                            const ledgerRows = [...ledgerRowsByDate.values()]
+                              .filter((row) => row.principal !== 0 || row.interest !== 0 || row.payInterest !== 0)
+                              .sort((first, second) => first.date.localeCompare(second.date))
+
+                            if (ledgerRows.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={4} className="borrower-ledger-empty">No loan transactions yet.</td>
+                                </tr>
+                              )
+                            }
+
+                            return ledgerRows.map((row) => {
+                              const displayDate = new Date(`${row.date}T00:00:00`).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: '2-digit',
+                              }).replace(' ', '-')
+
+                              return (
+                                <tr key={row.id}>
+                                  <td>{displayDate}</td>
+                                  <td className={row.principal < 0 ? 'negative' : ''}>{formatBorrowerCurrency(row.principal)}</td>
+                                  <td>{formatBorrowerCurrency(row.interest)}</td>
+                                  <td>{formatBorrowerCurrency(row.payInterest)}</td>
+                                </tr>
+                              )
+                            })
+                          })()}
+                        </tbody>
+                      </table>
                 </div>
                 {payingBorrowerId === borrower.id && (
                   <form
@@ -2271,6 +2615,7 @@ function LoansPage({
                       <input
                         type="number"
                         min="0"
+                        max={(Math.round(borrower.loanAmount * 100) + availableFundsCents) / 100}
                         step="0.01"
                         required
                         value={editedPrincipalAmount}
@@ -2331,6 +2676,7 @@ function LoansPage({
                       <input
                         type="number"
                         min="0.01"
+                        max={availableFundsCents / 100}
                         step="any"
                         required
                         value={principalAdditionAmount}
@@ -2340,8 +2686,12 @@ function LoansPage({
                         }}
                         placeholder="0"
                       />
+                      <small>Available funds: {formatCurrency(availableFundsCents / 100)}</small>
                     </label>
-                    <button type="submit" className="primary-button">Add principal</button>
+                    <button type="submit" className="primary-button" disabled={availableFundsCents <= 0}>Add principal</button>
+                    {availableFundsCents <= 0 && (
+                      <p className="member-error" role="alert">No available funds to add to this loan.</p>
+                    )}
                     <button
                       type="button"
                       className="secondary-button"
@@ -2355,39 +2705,6 @@ function LoansPage({
                     {principalAdditionError && <p className="member-error" role="alert">{principalAdditionError}</p>}
                   </form>
                 )}
-                <div className="loan-transactions">
-                  <small>Loan transactions</small>
-                  {borrower.transactions && borrower.transactions.length > 0 ? (
-                    <ul className="loan-transaction-list">
-                      {borrower.transactions.map((transaction) => (
-                        <li key={transaction.id} className="loan-transaction-item">
-                          <span className={`transaction-type ${transaction.type}`}>
-                            {transaction.type === 'interest-payment'
-                              ? 'Interest paid'
-                              : transaction.type === 'principal-payment'
-                                ? 'Principal paid'
-                                : transaction.type === 'principal-addition'
-                                  ? 'Principal added'
-                                  : transaction.type === 'principal-adjustment'
-                                    ? 'Principal edited'
-                                  : transaction.type === 'interest' ? 'Interest' : 'Loan'}
-                          </span>
-                          <strong>
-                              {transaction.type === 'principal-adjustment' && transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                                ? `${formatBorrowerCurrency(transaction.previousAmount)} → ${formatBorrowerCurrency(transaction.newAmount)}`
-                                : `${transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}${formatBorrowerCurrency(transaction.amount)}`}
-                          </strong>
-                          <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
-                          {transaction.type === 'principal-adjustment' && transaction.reason && (
-                              <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="loan-transactions-empty">No loan transactions yet.</p>
-                  )}
-                </div>
               </li>
             ))}
                   </ul>
@@ -2412,44 +2729,55 @@ function LoansPage({
             <p className="eyebrow">Loan History</p>
             <h3>Loan transactions</h3>
           </div>
+          <button
+            type="button"
+            className="secondary-button loan-history-toggle"
+            aria-expanded={isLoanHistoryExpanded}
+            aria-controls="loan-history-content"
+            onClick={() => setIsLoanHistoryExpanded((expanded) => !expanded)}
+          >
+            {isLoanHistoryExpanded ? 'Hide history' : 'Show history'}
+          </button>
         </div>
-        {loanHistory.length > 0 ? (
-          <ul className="transaction-list savings-history-list">
-            {loanHistory.map((transaction) => (
-              <li key={`${transaction.borrowerId}-${transaction.id}`} className="transaction-item loan-history-item">
-                <div>
-                  <strong>
-                    {transaction.type === 'interest-payment'
-                      ? 'Interest paid'
-                      : transaction.type === 'principal-payment'
-                        ? 'Principal paid'
-                        : transaction.type === 'principal-addition'
-                          ? 'Principal added'
-                          : transaction.type === 'principal-adjustment'
-                            ? 'Principal edited'
-                          : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
-                    {' · '}{transaction.borrowerName}
-                  </strong>
-                  <small>{formatDate(transaction.date)}</small>
-                  {transaction.type === 'principal-adjustment' && transaction.reason && (
-                    <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
-                  )}
-                </div>
-                {transaction.type === 'principal-adjustment'
-                  && transaction.previousAmount !== undefined
-                  && transaction.newAmount !== undefined ? (
-                    <span>{formatCurrency(transaction.previousAmount)} → {formatCurrency(transaction.newAmount)}</span>
-                  ) : (
-                    <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                      {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                    </span>
-                  )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No loan transactions yet.</p>
-        )}
+        <div id="loan-history-content" hidden={!isLoanHistoryExpanded}>
+          {loanHistory.length > 0 ? (
+            <ul className="transaction-list savings-history-list">
+              {loanHistory.map((transaction) => (
+                <li key={`${transaction.borrowerId}-${transaction.id}`} className="transaction-item loan-history-item">
+                  <div>
+                    <strong>
+                      {transaction.type === 'interest-payment'
+                        ? 'Interest paid'
+                        : transaction.type === 'principal-payment'
+                          ? 'Principal paid'
+                          : transaction.type === 'principal-addition'
+                            ? 'Principal added'
+                            : transaction.type === 'principal-adjustment'
+                              ? 'Principal edited'
+                            : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
+                      {' · '}{transaction.borrowerName}
+                    </strong>
+                    <small>{formatDate(transaction.date)}</small>
+                    {transaction.type === 'principal-adjustment' && transaction.reason && (
+                      <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
+                    )}
+                  </div>
+                  {transaction.type === 'principal-adjustment'
+                    && transaction.previousAmount !== undefined
+                    && transaction.newAmount !== undefined ? (
+                      <span>{formatCurrency(transaction.previousAmount)} → {formatCurrency(transaction.newAmount)}</span>
+                    ) : (
+                      <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                        {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                      </span>
+                    )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No loan transactions yet.</p>
+          )}
+        </div>
       </section>
 
     </main>
@@ -2543,6 +2871,7 @@ function ProfitsPage({
   const [otherProfitSource, setOtherProfitSource] = useState('')
   const [otherProfitDate, setOtherProfitDate] = useState(getLocalDate)
   const [otherProfitError, setOtherProfitError] = useState('')
+  const [isMemberPayoutHistoryExpanded, setIsMemberPayoutHistoryExpanded] = useState(true)
   const [groupEncoderNames] = useState(() => [...new Set(
     loadGroupUpdateData().data.groupEncoders.map((encoder) => encoder.name.trim()).filter(Boolean),
   )])
@@ -3079,6 +3408,7 @@ function ProfitsPage({
             <p className="eyebrow">Member payouts</p>
             <h3>Profit transactions</h3>
           </div>
+          <div className="savings-history-header-actions">
           {isAdmin && (isClearConfirmationOpen ? (
             <form
               className="clear-loans-form clear-savings-form"
@@ -3138,28 +3468,47 @@ function ProfitsPage({
               Clear all data
             </button>
           ))}
+            <button
+              type="button"
+              className="secondary-button savings-summary-toggle"
+              aria-label={`${isMemberPayoutHistoryExpanded ? 'Collapse' : 'Expand'} member payout transaction history`}
+              aria-expanded={isMemberPayoutHistoryExpanded}
+              aria-controls="member-payout-history-content"
+              onClick={() => setIsMemberPayoutHistoryExpanded((expanded) => !expanded)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                className={isMemberPayoutHistoryExpanded ? 'expanded' : ''}
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-        {profitCashouts.length > 0 ? (
-          <ul className="profit-interest-list">
-            {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
-              <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
-                <span>{cashout.memberName} · {cashout.action === 'added to savings'
-                  ? 'Added to savings'
-                  : cashout.action === 'penalty'
-                    ? 'Penalty to group allowance'
-                    : cashout.action === 'encoder'
-                      ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
-                      : 'Cashout'}</span>
-                <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
-                  {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
-                </strong>
-                <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No profit transactions yet.</p>
-        )}
+        <div id="member-payout-history-content" hidden={!isMemberPayoutHistoryExpanded}>
+          {profitCashouts.length > 0 ? (
+            <ul className="profit-interest-list">
+              {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
+                <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
+                  <span>{cashout.memberName} · {cashout.action === 'added to savings'
+                    ? 'Added to savings'
+                    : cashout.action === 'penalty'
+                      ? 'Penalty to group allowance'
+                      : cashout.action === 'encoder'
+                        ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
+                        : 'Cashout'}</span>
+                  <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
+                    {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
+                  </strong>
+                  <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No profit transactions yet.</p>
+          )}
+        </div>
       </section>
     </main>
   )
@@ -3979,6 +4328,7 @@ function AccountPage({ name, email }: { name: string; email: string }) {
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview')
   const [isDarkMode, setIsDarkMode] = useState(false)
+  const [isIntroVisible, setIsIntroVisible] = useState(false)
   const [isLoginOpen, setIsLoginOpen] = useState(false)
   const [isRegisterMode, setIsRegisterMode] = useState(false)
   const [loginMessage, setLoginMessage] = useState('')
@@ -3993,6 +4343,14 @@ function App() {
   const [otherProfits, setOtherProfits] = useState<OtherProfit[]>(loadSavedOtherProfits)
   const [profitCashouts, setProfitCashouts] = useState<ProfitCashout[]>(loadSavedProfitCashouts)
   const [undoTransactions, setUndoTransactions] = useState<AppUndoTransaction[]>(loadSavedUndoTransactions)
+  const [lastTransactionUndo, setLastTransactionUndo] = useState<{
+    label: string
+    snapshot: TransactionUndoSnapshot
+  } | null>(null)
+  const [isUndoPasswordOpen, setIsUndoPasswordOpen] = useState(false)
+  const [undoAdminPassword, setUndoAdminPassword] = useState('')
+  const [undoPasswordError, setUndoPasswordError] = useState('')
+  const [isVerifyingUndoPassword, setIsVerifyingUndoPassword] = useState(false)
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
   const [signedInRole, setSignedInRole] = useState<AccountRole | null>(null)
@@ -4032,8 +4390,72 @@ function App() {
     deletedProfitTransactions,
     deletedLoans,
   }
+  const rememberTransactionUndo = (label: string) => {
+    setIsUndoPasswordOpen(false)
+    setUndoAdminPassword('')
+    setUndoPasswordError('')
+    setLastTransactionUndo({
+      label,
+      snapshot: {
+        members,
+        accounts,
+        borrowers,
+        removedBorrowerTransactions,
+        profitTransfers,
+        otherProfits,
+        profitCashouts,
+      },
+    })
+  }
+  const undoLastTransaction = () => {
+    if (!lastTransactionUndo) return
+    const { snapshot } = lastTransactionUndo
+    setMembers(snapshot.members)
+    setAccounts(snapshot.accounts)
+    setBorrowers(snapshot.borrowers)
+    setRemovedBorrowerTransactions(snapshot.removedBorrowerTransactions)
+    setProfitTransfers(snapshot.profitTransfers)
+    setOtherProfits(snapshot.otherProfits)
+    setProfitCashouts(snapshot.profitCashouts)
+    setLastTransactionUndo(null)
+  }
+  const handleUndoSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (signedInRole !== 'admin' || !lastTransactionUndo) return
+    const adminAccount = accounts.find((account) =>
+      account.role === 'admin'
+      && account.email.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
+    )
+    if (!adminAccount) {
+      setUndoPasswordError('The logged-in admin account could not be verified.')
+      return
+    }
+
+    setIsVerifyingUndoPassword(true)
+    setUndoPasswordError('')
+    try {
+      if (!(await verifyPassword(undoAdminPassword, adminAccount))) {
+        setUndoPasswordError('The admin password is incorrect.')
+        return
+      }
+      undoLastTransaction()
+      setIsUndoPasswordOpen(false)
+      setUndoAdminPassword('')
+    } catch (error) {
+      setUndoPasswordError(error instanceof Error ? error.message : 'Could not verify the admin password.')
+    } finally {
+      setIsVerifyingUndoPassword(false)
+    }
+  }
+  const closeUndoPasswordDialog = () => {
+    if (isVerifyingUndoPassword) return
+    setIsUndoPasswordOpen(false)
+    setUndoAdminPassword('')
+    setUndoPasswordError('')
+  }
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
+  const availableFunds = totalSavings - totalLoanProceeds
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
   const totalOtherProfit = otherProfits.reduce((total, profit) => total + profit.amount, 0)
   const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, currentYear)
@@ -4054,7 +4476,13 @@ function App() {
     member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase(),
   )
 
-    useEffect(() => {
+  useEffect(() => {
+    if (!isIntroVisible) return
+    const introTimeout = window.setTimeout(() => setIsIntroVisible(false), 1800)
+    return () => window.clearTimeout(introTimeout)
+  }, [isIntroVisible])
+
+  useEffect(() => {
     document.documentElement.dataset.theme = isDarkMode ? 'dark' : 'light'
   }, [isDarkMode])
 
@@ -4139,6 +4567,7 @@ function App() {
         const workbookData = await readWorkbookData(directory)
         if (!isActive) return
         if (workbookData) {
+          setLastTransactionUndo(null)
           setMembers(syncAccountMembers(workbookData.accounts, workbookData.members))
           setDeletedSavingsTransactions(workbookData.deletedSavingsTransactions.length > 0
             ? workbookData.deletedSavingsTransactions
@@ -4250,6 +4679,7 @@ function App() {
       }
       await saveDirectory(directory)
       databaseDirectory.current = directory
+      setLastTransactionUndo(null)
       setMembers(connectedMembers)
       setAccounts(connectedAccounts)
       setBorrowers(connectedBorrowers)
@@ -4381,9 +4811,11 @@ function App() {
         setSignedInRole(account.role)
       }
 
+      setLastTransactionUndo(null)
       setActiveTab('overview')
       setLoginMessage('')
       setIsLoginOpen(false)
+      setIsIntroVisible(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setLoginMessage('Folder selection cancelled. Choose a database folder to continue registering or signing in.')
@@ -4396,12 +4828,21 @@ function App() {
     }
   }
 
-  const addSavings = (memberName: string, amount: number, date: string, source?: 'member profit') => {
+  const addSavings = (
+    memberName: string,
+    amount: number,
+    date: string,
+    source?: 'member profit',
+    shouldRememberUndo = true,
+  ) => {
     const canEditMemberSavings = (member: Member) =>
       signedInRole === 'admin'
       || (signedInRole === 'member'
         && Boolean(signedInEmail.trim())
         && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || !canEditMemberSavings(member) || !Number.isFinite(amount) || amount <= 0 || !date) return
+    if (shouldRememberUndo) rememberTransactionUndo(source ? 'profit added to savings' : 'savings contribution')
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName && canEditMemberSavings(member)
@@ -4411,8 +4852,20 @@ function App() {
     )
   }
 
+  const toggleSavingsDateExclusion = (date: string, excluded: boolean) => {
+    if (signedInRole !== 'admin' || !/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
+    rememberTransactionUndo('savings summary exclusion')
+    setMembers((currentMembers) => currentMembers.map((member) => {
+      const excludedDates = new Set(member.excludedSavingsDates ?? [])
+      if (excluded) excludedDates.add(date)
+      else excludedDates.delete(date)
+      return { ...member, excludedSavingsDates: [...excludedDates] }
+    }))
+  }
+
   const addOtherProfit = (profit: OtherProfit) => {
     if (signedInRole !== 'admin') return
+    rememberTransactionUndo('other profit')
     setOtherProfits((currentProfits) => [...currentProfits, profit])
   }
 
@@ -4465,6 +4918,7 @@ function App() {
       contributions: [],
       withdrawals: [],
       adjustments: [],
+      excludedSavingsDates: [...new Set(members.flatMap((existingMember) => existingMember.excludedSavingsDates ?? []))],
     }
     const updatedMembers = [...members, member]
     const updatedAccounts = [...accounts, account]
@@ -4483,6 +4937,8 @@ function App() {
     )
     setMembers(updatedMembers)
     setAccounts(updatedAccounts)
+    if (initialSavings > 0) rememberTransactionUndo('new member savings')
+    else setLastTransactionUndo(null)
     setDatabaseMessage(`Excel database connected: ${directory.name}`)
     return { success: true }
   }
@@ -4491,6 +4947,9 @@ function App() {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
       || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim() || !date) return
     const newAmount = Number(amount.toFixed(2))
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || Number(getMemberSavings(member).toFixed(2)) === newAmount) return
+    rememberTransactionUndo('savings adjustment')
     setMembers((currentMembers) => currentMembers.map((member) => {
       if (member.name !== memberName) return member
       const previousAmount = Number(getMemberSavings(member).toFixed(2))
@@ -4521,7 +4980,8 @@ function App() {
     const date = getLocalDate()
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
     if (action === 'add to savings') {
-      addSavings(memberName, amount, date, 'member profit')
+      rememberTransactionUndo('profit added to savings')
+      addSavings(memberName, amount, date, 'member profit', false)
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
         memberName,
         amount,
@@ -4533,6 +4993,7 @@ function App() {
     }
 
     if (action === 'get profit') {
+      rememberTransactionUndo('profit cashout')
       setProfitCashouts((currentCashouts) => [...currentCashouts, {
         memberName,
         amount,
@@ -4547,7 +5008,8 @@ function App() {
         && Boolean(signedInEmail.trim())
         && member.accountEmail?.trim().toLowerCase() === signedInEmail.trim().toLowerCase())
     if (!canEditMemberSavings) return
-    pullOutSavings(memberName, amount, date, 'Profit penalty')
+    rememberTransactionUndo('profit penalty')
+    pullOutSavings(memberName, amount, date, 'Profit penalty', false)
     setProfitCashouts((currentCashouts) => [...currentCashouts, {
       memberName,
       amount,
@@ -4565,25 +5027,30 @@ function App() {
       || payments.some((payment) => !payment.memberName.trim()
         || !Number.isFinite(payment.amount) || payment.amount <= 0)) return
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
+    if (profitCashouts.some((cashout) =>
+      cashout.transferTotal === transferTotal
+      && cashout.action !== 'penalty')) return
+    const date = getLocalDate()
+    const payouts = payments.map(({ memberName, amount }) => ({
+      memberName,
+      amount,
+      date,
+      action: 'encoder' as const,
+      transferTotal,
+      encoderName: encoderName.trim(),
+    }))
+    rememberTransactionUndo('encoder payouts')
     setProfitCashouts((currentCashouts) => {
       if (currentCashouts.some((cashout) =>
         cashout.transferTotal === transferTotal
         && cashout.action !== 'penalty')) return currentCashouts
-      const date = getLocalDate()
-      return [...currentCashouts, ...payments.map(({ memberName, amount }) => ({
-        memberName,
-        amount,
-        date,
-        action: 'encoder' as const,
-        transferTotal,
-        encoderName: encoderName.trim(),
-      }))]
+      return [...currentCashouts, ...payouts]
     })
   }
 
   const transferProfit = (dateFrom: string, dateTo: string) => {
     if (signedInRole !== 'admin') return
-    setProfitTransfers((currentTransfers) => {
+    const createTransfer = (currentTransfers: ProfitTransfer[]) => {
       const transferred = currentTransfers.reduce((total, transfer) => total + transfer.amount, 0)
       let balance = Number(Math.max(0, totalInterestPaid + totalOtherProfit - transferred).toFixed(2))
       const allocatedByPayment = new Map<string, number>()
@@ -4626,20 +5093,36 @@ function App() {
       })
       const amount = paymentAllocations.reduce((total, allocation) => total + allocation.amount, 0)
       return amount > 0
-        ? [...currentTransfers, {
+        ? {
           amount,
           date: getLocalDate(),
           periodFrom: dateFrom,
           periodTo: dateTo,
           paymentAllocations,
-        }]
-        : currentTransfers
+        }
+        : null
+    }
+    if (!createTransfer(profitTransfers)) return
+    rememberTransactionUndo('profit transfer')
+    setProfitTransfers((currentTransfers) => {
+      const transfer = createTransfer(currentTransfers)
+      return transfer ? [...currentTransfers, transfer] : currentTransfers
     })
   }
 
-  const pullOutSavings = (memberName: string, amount: number, date: string, reason: string) => {
+  const pullOutSavings = (
+    memberName: string,
+    amount: number,
+    date: string,
+    reason: string,
+    shouldRememberUndo = true,
+  ) => {
     if (signedInRole !== 'admin') return
     const amountInCents = Math.round(amount * 100)
+    const member = members.find((candidate) => candidate.name === memberName)
+    if (!member || !Number.isFinite(amount) || amountInCents <= 0
+      || amountInCents > Math.round(getMemberSavings(member) * 100)) return
+    if (shouldRememberUndo) rememberTransactionUndo('savings withdrawal')
     setMembers((currentMembers) =>
       currentMembers.map((member) =>
         member.name === memberName
@@ -4680,6 +5163,7 @@ function App() {
       return { success: false, message: 'You cannot delete the currently signed-in admin account.' }
     }
 
+    setLastTransactionUndo(null)
     setMembers((currentMembers) => currentMembers.filter((member) => member.name !== memberName))
     if (linkedAccount) {
       setAccounts((currentAccounts) => currentAccounts.filter((account) =>
@@ -4708,6 +5192,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const resetDate = getLocalDate()
     const deletedTransactions = members.flatMap((member): DeletedSavingsTransaction[] => [
       ...(member.initialSavings > 0 ? [{
@@ -4777,6 +5262,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const deletedAt = getLocalDate()
     const borrowerRecords = borrowers.flatMap((borrower): DeletedLoanRecord[] => {
       const borrowerTransactions = borrower.transactions ?? []
@@ -4838,6 +5324,7 @@ function App() {
       return { success: false, message: 'The admin password is incorrect.' }
     }
 
+    setLastTransactionUndo(null)
     const deletedAt = getLocalDate()
     setDeletedProfitTransactions((currentTransactions) => [
       ...currentTransactions,
@@ -4851,6 +5338,7 @@ function App() {
 
   const addBorrower = (borrower: Borrower) => {
     if (signedInRole !== 'admin') return
+    rememberTransactionUndo('new loan')
     setBorrowers((currentBorrowers) => [...currentBorrowers, borrower])
   }
 
@@ -4860,6 +5348,7 @@ function App() {
     if (!borrowerToRemove
       || hasOutstandingBorrowerBalance(borrowerToRemove.loanAmount)
       || hasOutstandingBorrowerBalance(borrowerToRemove.paydayInterest)) return
+    setLastTransactionUndo(null)
     setRemovedBorrowerTransactions((currentTransactions) => [
       ...currentTransactions,
       ...(borrowerToRemove.transactions ?? []).map((transaction) => ({
@@ -4877,6 +5366,9 @@ function App() {
 
   const addBorrowerInterest = (borrowerId: string, date: string) => {
     if (signedInRole !== 'admin') return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || borrower.loanAmount <= 0) return
+    rememberTransactionUndo('interest accrued')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const accruedInterest = Number((borrower.loanAmount * borrower.interestRate / 100).toFixed(2))
@@ -4897,6 +5389,9 @@ function App() {
 
   const payBorrowerInterest = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || amount > borrower.paydayInterest) return
+    rememberTransactionUndo('interest payment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId || amount > borrower.paydayInterest) return borrower
       const remainingInterest = Number((borrower.paydayInterest - amount).toFixed(2))
@@ -4916,6 +5411,9 @@ function App() {
 
   const payBorrowerPrincipal = (borrowerId: string, amount: number) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || hasOutstandingBorrowerBalance(borrower.paydayInterest) || amount > borrower.loanAmount) return
+    rememberTransactionUndo('principal payment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId
         || hasOutstandingBorrowerBalance(borrower.paydayInterest)
@@ -4937,6 +5435,8 @@ function App() {
 
   const addBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+    if (!borrowers.some((borrower) => borrower.id === borrowerId)) return
+    rememberTransactionUndo('principal addition')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const updatedLoanAmount = Number((borrower.loanAmount + amount).toFixed(2))
@@ -4957,6 +5457,9 @@ function App() {
 
   const editBorrowerPrincipal = (borrowerId: string, amount: number, reason: string, date: string) => {
     if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0 || !reason.trim()) return
+    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
+    if (!borrower || Number(borrower.loanAmount.toFixed(2)) === Number(amount.toFixed(2))) return
+    rememberTransactionUndo('principal adjustment')
     setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
       if (borrower.id !== borrowerId) return borrower
       const previousAmount = Number(borrower.loanAmount.toFixed(2))
@@ -5212,6 +5715,7 @@ function App() {
             canEditSavings={Boolean(signedInMember)}
             overallSavings={totalSavings}
             onMemberChange={() => undefined}
+            onToggleSavingsDate={() => undefined}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}
@@ -5226,6 +5730,7 @@ function App() {
           <LoansPage
             borrowers={borrowers}
             guarantors={registeredGuarantors}
+            availableFunds={availableFunds}
             isAdmin={false}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
@@ -5271,6 +5776,7 @@ function App() {
             isAdmin
             canEditSavings
             onMemberChange={setSelectedMember}
+            onToggleSavingsDate={toggleSavingsDateExclusion}
             onAddSavings={addSavings}
             onPullOutSavings={pullOutSavings}
             onEditMemberSavings={editMemberSavings}
@@ -5284,6 +5790,7 @@ function App() {
           <LoansPage
             borrowers={borrowers}
             guarantors={registeredGuarantors}
+            availableFunds={availableFunds}
             isAdmin={signedInRole === 'admin'}
             onAddBorrower={addBorrower}
             onAddBorrowerInterest={addBorrowerInterest}
@@ -5354,6 +5861,25 @@ function App() {
 
   return (
     <div className="app-shell" data-theme={isDarkMode ? 'dark' : 'light'}>
+      {isIntroVisible && createPortal(
+        <div className="intro-overlay" data-theme={isDarkMode ? 'dark' : 'light'} aria-hidden="true">
+          <div className="intro-content">
+            <div className="intro-mark">
+              <svg viewBox="0 0 64 64" fill="none">
+                <circle cx="32" cy="32" r="28" />
+                <path d="M20 39V30M31 39V24M42 39V18" />
+                <path d="m18 23 11-7 9 4 9-9" />
+                <path d="M39 11h8v8" />
+              </svg>
+            </div>
+            <p className="intro-eyebrow">WELCOME TO</p>
+            <h1>Funds Organizer</h1>
+            <p className="intro-tagline">Your money, in harmony.</p>
+            <span className="intro-progress" />
+          </div>
+        </div>,
+        document.body,
+      )}
       <button
         type="button"
         className="theme-toggle"
@@ -5385,6 +5911,27 @@ function App() {
                   </button>
                 ))}
               </nav>
+              {signedInRole === 'admin' && (
+                <button
+                  type="button"
+                  className="secondary-button undo-transaction-button"
+                  disabled={!lastTransactionUndo}
+                  title={lastTransactionUndo
+                    ? `Undo ${lastTransactionUndo.label}`
+                    : 'No recent transaction to undo'}
+                  aria-label={lastTransactionUndo
+                    ? `Undo last transaction: ${lastTransactionUndo.label}`
+                    : 'No recent transaction to undo'}
+                  onClick={() => {
+                    if (!lastTransactionUndo) return
+                    setUndoAdminPassword('')
+                    setUndoPasswordError('')
+                    setIsUndoPasswordOpen(true)
+                  }}
+                >
+                  <span aria-hidden="true">↶</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="login-button"
@@ -5393,6 +5940,10 @@ function App() {
                   setSignedInUser('')
                   setSignedInEmail('')
                   setSignedInRole(null)
+                  setLastTransactionUndo(null)
+                  setIsUndoPasswordOpen(false)
+                  setUndoAdminPassword('')
+                  setUndoPasswordError('')
                   setLoginMessage('')
                   setIsRegisterMode(false)
                 }}
@@ -5406,7 +5957,9 @@ function App() {
               )}
             </div>
           </header>
-          {renderPage()}
+          <div key={activeTab} className="tab-transition">
+            {renderPage()}
+          </div>
         </>
       ) : (
         <main className="auth-locked-screen" aria-label="Sign in required">
@@ -5530,6 +6083,64 @@ function App() {
           </div>,
           document.body,
         )
+      )}
+      {isUndoPasswordOpen && signedInRole === 'admin' && createPortal(
+        <div className="login-overlay" data-theme={isDarkMode ? 'dark' : 'light'}>
+          <section
+            className="login-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="undo-password-title"
+          >
+            <div className="login-dialog-header">
+              <div>
+                <p className="eyebrow">Protected action</p>
+                <h2 id="undo-password-title">Undo last transaction</h2>
+              </div>
+              <button
+                type="button"
+                className="login-close-button"
+                aria-label="Cancel undo"
+                disabled={isVerifyingUndoPassword}
+                onClick={closeUndoPasswordDialog}
+              >
+                ×
+              </button>
+            </div>
+            <form className="login-form" noValidate onSubmit={(event) => void handleUndoSubmit(event)}>
+              <p className="login-note">
+                Enter your admin password to undo {lastTransactionUndo?.label ?? 'the last transaction'}.
+              </p>
+              <label>
+                Admin password
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  autoFocus
+                  required
+                  value={undoAdminPassword}
+                  onChange={(event) => {
+                    setUndoAdminPassword(event.target.value)
+                    setUndoPasswordError('')
+                  }}
+                />
+              </label>
+              <button type="submit" className="primary-button" disabled={isVerifyingUndoPassword}>
+                {isVerifyingUndoPassword ? 'Verifying…' : 'Confirm undo'}
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={isVerifyingUndoPassword}
+                onClick={closeUndoPasswordDialog}
+              >
+                Cancel
+              </button>
+              {undoPasswordError && <p className="member-error" role="alert">{undoPasswordError}</p>}
+            </form>
+          </section>
+        </div>,
+        document.body,
       )}
     </div>
   )
