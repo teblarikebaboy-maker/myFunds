@@ -84,6 +84,12 @@ export type ProfitCashout = {
   transferTotal?: number
   encoderName?: string
 }
+export type AppUndoTransaction = {
+  id: string
+  type: 'UNDO'
+  date: string
+  description: string
+}
 export type DeletedProfitTransaction = ProfitCashout & { deletedAt: string }
 
 export type Borrower = {
@@ -116,6 +122,7 @@ const LOCAL_OTHER_PROFITS_KEY = 'funds-organizer-other-profits-v1'
 const LOCAL_DELETED_SAVINGS_TRANSACTIONS_KEY = 'funds-organizer-deleted-savings-transactions-v1'
 const LOCAL_DELETED_PROFIT_TRANSACTIONS_KEY = 'funds-organizer-deleted-profit-transactions-v1'
 const LOCAL_DELETED_LOANS_KEY = 'funds-organizer-deleted-loans-v1'
+const LOCAL_UNDO_TRANSACTIONS_KEY = 'funds-organizer-undo-transactions-v1'
 const DATABASE_FILE_NAME = 'funds-organizer-database.xlsx'
 const DIRECTORY_DATABASE_NAME = 'funds-organizer-directory'
 const DIRECTORY_STORE_NAME = 'settings'
@@ -245,6 +252,25 @@ export const loadSavedDeletedLoans = (): DeletedLoanRecord[] => {
 export const saveDeletedLoansLocally = (loans: DeletedLoanRecord[]) => {
   try {
     localStorage.setItem(LOCAL_DELETED_LOANS_KEY, JSON.stringify(loans))
+  } catch {
+    // Keep the application usable when browser storage is unavailable.
+  }
+}
+
+export const loadSavedUndoTransactions = (): AppUndoTransaction[] => {
+  try {
+    const savedTransactions = localStorage.getItem(LOCAL_UNDO_TRANSACTIONS_KEY)
+    if (!savedTransactions) return []
+    const parsed: unknown = JSON.parse(savedTransactions)
+    return Array.isArray(parsed) ? parsed as AppUndoTransaction[] : []
+  } catch {
+    return []
+  }
+}
+
+export const saveUndoTransactionsLocally = (transactions: AppUndoTransaction[]) => {
+  try {
+    localStorage.setItem(LOCAL_UNDO_TRANSACTIONS_KEY, JSON.stringify(transactions))
   } catch {
     // Keep the application usable when browser storage is unavailable.
   }
@@ -380,7 +406,7 @@ export const verifyPassword = async (password: string, account: DatabaseAccount)
 
 export const readWorkbookData = async (
   directory: DatabaseDirectoryHandle,
-): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; otherProfits?: OtherProfit[]; profitCashouts: ProfitCashout[]; deletedSavingsTransactions: DeletedSavingsTransaction[]; deletedProfitTransactions: DeletedProfitTransaction[]; deletedLoans: DeletedLoanRecord[] } | null> => {
+): Promise<{ members: Member[]; accounts: DatabaseAccount[]; borrowers: Borrower[]; removedBorrowerTransactions: RemovedBorrowerTransaction[]; profitTransfers: ProfitTransfer[]; otherProfits?: OtherProfit[]; profitCashouts: ProfitCashout[]; undoTransactions: AppUndoTransaction[]; deletedSavingsTransactions: DeletedSavingsTransaction[]; deletedProfitTransactions: DeletedProfitTransaction[]; deletedLoans: DeletedLoanRecord[] } | null> => {
   const ExcelJS = (await import('exceljs')).default
   let fileHandle: DatabaseFileHandle
   try {
@@ -760,7 +786,19 @@ export const readWorkbookData = async (
     })
   })
 
-  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, otherProfits: otherProfitsSheet ? otherProfits : undefined, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans }
+  const undoTransactions: AppUndoTransaction[] = []
+  workbook.getWorksheet('Undo Transactions')?.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return
+    const id = String(row.getCell(1).value ?? '').trim()
+    const type = String(row.getCell(2).value ?? '').trim()
+    const date = getCellDate(row.getCell(3).value)
+    const description = String(row.getCell(4).value ?? '').trim()
+    if (id && type === 'UNDO' && date && description) {
+      undoTransactions.push({ id, type, date, description })
+    }
+  })
+
+  return { members: [...members.values()], accounts, borrowers, removedBorrowerTransactions, profitTransfers, otherProfits: otherProfitsSheet ? otherProfits : undefined, profitCashouts, undoTransactions, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans }
 }
 
 export const writeWorkbookData = async (
@@ -775,6 +813,7 @@ export const writeWorkbookData = async (
   deletedProfitTransactions: DeletedProfitTransaction[] = [],
   deletedLoans: DeletedLoanRecord[] = [],
   otherProfits: OtherProfit[] = [],
+  undoTransactions: AppUndoTransaction[] = [],
 ) => {
   const ExcelJS = (await import('exceljs')).default
   const workbook = new ExcelJS.Workbook()
@@ -1047,6 +1086,15 @@ export const writeWorkbookData = async (
     ]),
   })
 
+  const undoTransactionsSheet = workbook.addWorksheet('Undo Transactions')
+  undoTransactionsSheet.addRow(['Transaction ID', 'Type', 'Date', 'Description'])
+  undoTransactions.forEach((transaction) => undoTransactionsSheet.addRow([
+    transaction.id,
+    transaction.type,
+    transaction.date,
+    transaction.description,
+  ]))
+
   const fileHandle = await directory.getFileHandle(DATABASE_FILE_NAME, { create: true })
   const writable = await fileHandle.createWritable()
   try {
@@ -1074,5 +1122,7 @@ export const writeWorkbookMembers = async (directory: DatabaseDirectoryHandle, m
     existingData?.deletedSavingsTransactions ?? [],
     existingData?.deletedProfitTransactions ?? [],
     existingData?.deletedLoans ?? [],
+    existingData?.otherProfits ?? [],
+    existingData?.undoTransactions ?? [],
   )
 }

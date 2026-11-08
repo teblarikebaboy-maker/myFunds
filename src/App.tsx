@@ -10,6 +10,7 @@ import {
   loadSavedMembers,
   loadSavedOtherProfits,
   loadSavedProfitCashouts,
+  loadSavedUndoTransactions,
   readWorkbookData,
   saveDirectory,
   saveDeletedProfitTransactionsLocally,
@@ -18,10 +19,12 @@ import {
   saveMembersLocally,
   saveOtherProfitsLocally,
   saveProfitCashoutsLocally,
+  saveUndoTransactionsLocally,
   supportsDatabaseFolder,
   verifyPassword,
   writeWorkbookData,
   type AccountRole,
+  type AppUndoTransaction,
   type Borrower,
   type DatabaseAccount,
   type DatabaseDirectoryHandle,
@@ -52,6 +55,19 @@ type SavingsTransaction = {
   previousAmount?: number
   newAmount?: number
 }
+type AppDataSnapshot = {
+  members: Member[]
+  accounts: DatabaseAccount[]
+  borrowers: Borrower[]
+  removedBorrowerTransactions: RemovedBorrowerTransaction[]
+  profitTransfers: ProfitTransfer[]
+  otherProfits: OtherProfit[]
+  profitCashouts: ProfitCashout[]
+  deletedSavingsTransactions: DeletedSavingsTransaction[]
+  deletedProfitTransactions: DeletedProfitTransaction[]
+  deletedLoans: DeletedLoanRecord[]
+}
+
 const getSavingsAdjustmentTotal = (member: Member) =>
   (member.adjustments ?? []).reduce(
     (total, adjustment) => total + adjustment.newAmount - adjustment.previousAmount,
@@ -3976,12 +3992,18 @@ function App() {
   const [profitTransfers, setProfitTransfers] = useState<ProfitTransfer[]>([])
   const [otherProfits, setOtherProfits] = useState<OtherProfit[]>(loadSavedOtherProfits)
   const [profitCashouts, setProfitCashouts] = useState<ProfitCashout[]>(loadSavedProfitCashouts)
+  const [undoTransactions, setUndoTransactions] = useState<AppUndoTransaction[]>(loadSavedUndoTransactions)
   const [signedInUser, setSignedInUser] = useState('')
   const [signedInEmail, setSignedInEmail] = useState('')
   const [signedInRole, setSignedInRole] = useState<AccountRole | null>(null)
   const [selectedMember, setSelectedMember] = useState('all')
   const [databaseMessage, setDatabaseMessage] = useState('Loading saved data…')
   const [isDatabaseConnecting, setIsDatabaseConnecting] = useState(false)
+  const [canUndoPreviousAction, setCanUndoPreviousAction] = useState(false)
+  const [isUndoDialogOpen, setIsUndoDialogOpen] = useState(false)
+  const [undoPassword, setUndoPassword] = useState('')
+  const [undoError, setUndoError] = useState('')
+  const [isUndoingPreviousAction, setIsUndoingPreviousAction] = useState(false)
   const [canChooseDatabaseFolder, setCanChooseDatabaseFolder] = useState(supportsDatabaseFolder)
   const databaseDirectory = useRef<DatabaseDirectoryHandle | null>(null)
   const initialMembers = useRef(members)
@@ -3994,6 +4016,22 @@ function App() {
   const initialProfitTransfers = useRef(profitTransfers)
   const initialOtherProfits = useRef(otherProfits)
   const initialProfitCashouts = useRef(profitCashouts)
+  const previousAppData = useRef<AppDataSnapshot | null>(null)
+  const undoableAppData = useRef<AppDataSnapshot | null>(null)
+  const undoIdentity = useRef('')
+  const skipUndoCapture = useRef(false)
+  const currentAppDataSnapshot: AppDataSnapshot = {
+    members,
+    accounts,
+    borrowers,
+    removedBorrowerTransactions,
+    profitTransfers,
+    otherProfits,
+    profitCashouts,
+    deletedSavingsTransactions,
+    deletedProfitTransactions,
+    deletedLoans,
+  }
   const totalSavings = members.reduce((total, member) => total + getMemberSavings(member), 0)
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
@@ -4021,6 +4059,58 @@ function App() {
   }, [isDarkMode])
 
   useEffect(() => {
+      const identity = signedInRole === 'admin' ? signedInEmail.trim().toLowerCase() : ''
+      const identityChanged = identity !== undoIdentity.current
+      undoIdentity.current = identity
+
+      if (identityChanged || !identity) {
+        previousAppData.current = currentAppDataSnapshot
+        undoableAppData.current = null
+        setCanUndoPreviousAction(false)
+        return
+      }
+
+      const previousSnapshot = previousAppData.current
+      previousAppData.current = currentAppDataSnapshot
+      if (!previousSnapshot) return
+
+      const hasChanged = previousSnapshot.members !== members
+        || previousSnapshot.accounts !== accounts
+        || previousSnapshot.borrowers !== borrowers
+        || previousSnapshot.removedBorrowerTransactions !== removedBorrowerTransactions
+        || previousSnapshot.profitTransfers !== profitTransfers
+        || previousSnapshot.otherProfits !== otherProfits
+        || previousSnapshot.profitCashouts !== profitCashouts
+        || previousSnapshot.deletedSavingsTransactions !== deletedSavingsTransactions
+        || previousSnapshot.deletedProfitTransactions !== deletedProfitTransactions
+        || previousSnapshot.deletedLoans !== deletedLoans
+      if (!hasChanged) return
+
+      if (skipUndoCapture.current) {
+        skipUndoCapture.current = false
+        undoableAppData.current = null
+        setCanUndoPreviousAction(false)
+        return
+      }
+
+      undoableAppData.current = previousSnapshot
+      setCanUndoPreviousAction(true)
+    }, [
+      signedInEmail,
+      signedInRole,
+      members,
+      accounts,
+      borrowers,
+      removedBorrowerTransactions,
+      profitTransfers,
+      otherProfits,
+      profitCashouts,
+      deletedSavingsTransactions,
+      deletedProfitTransactions,
+      deletedLoans,
+    ])
+
+    useEffect(() => {
     let isActive = true
 
     const restoreDatabase = async () => {
@@ -4088,6 +4178,7 @@ function App() {
     saveDeletedSavingsTransactionsLocally(deletedSavingsTransactions)
     saveDeletedProfitTransactionsLocally(deletedProfitTransactions)
     saveDeletedLoansLocally(deletedLoans)
+    saveUndoTransactionsLocally(undoTransactions)
     const directory = databaseDirectory.current
     if (!directory) return
 
@@ -4102,7 +4193,7 @@ function App() {
         }
 
         setDatabaseMessage(`Saving Excel database: ${directory.name}…`)
-        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits)
+        await writeWorkbookData(directory, members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits, undoTransactions)
         if (isActive) setDatabaseMessage(`Excel database connected: ${directory.name}`)
       } catch (error) {
         if (!isActive) return
@@ -4120,7 +4211,7 @@ function App() {
     return () => {
       isActive = false
     }
-  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits])
+  }, [members, accounts, borrowers, removedBorrowerTransactions, profitTransfers, profitCashouts, deletedSavingsTransactions, deletedProfitTransactions, deletedLoans, otherProfits, undoTransactions])
 
   const handleChooseDatabaseFolder = async () => {
     setIsDatabaseConnecting(true)
