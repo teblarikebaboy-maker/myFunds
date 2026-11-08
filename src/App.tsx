@@ -1198,6 +1198,10 @@ function SavingsPage({
         ? [{ amount: member.initialSavings, date: member.initialSavingsDate }]
         : []),
       ...member.contributions.filter((contribution) => contribution.amount > 0),
+      ...member.withdrawals.map((withdrawal) => ({
+        amount: -withdrawal.amount,
+        date: withdrawal.date,
+      })),
     ]
 
     deposits.forEach(({ amount, date }) => {
