@@ -415,7 +415,7 @@ const getSavingsScheduleDates = () => {
   for (let month = 0; month < 12; month += 1) {
     const monthPrefix = `${savingsSummaryYear}-${String(month + 1).padStart(2, '0')}`
     dates.push(`${monthPrefix}-15`)
-    dates.push(`${monthPrefix}-${month === 1 ? '28' : '30'}`)
+    if (month < 11) dates.push(`${monthPrefix}-${month === 1 ? '28' : '30'}`)
   }
   return dates
 }
@@ -1021,6 +1021,8 @@ function SavingsPage({
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
   const [isSavingsSummaryExpanded, setIsSavingsSummaryExpanded] = useState(true)
+  const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(true)
+  const [collapsedMemberSavingsTransactions, setCollapsedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
@@ -1186,6 +1188,7 @@ function SavingsPage({
     deposits.forEach(({ amount, date }) => {
       if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
       if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2026-12-30') return
+      if (date === `${savingsSummaryYear}-12-30`) return
 
       const savingsByMember = savingsByDateAndMember.get(date) ?? new Map<string, number>()
       savingsByMember.set(
@@ -1451,7 +1454,10 @@ function SavingsPage({
         {members.length > 0 ? (
           filteredMembers.length > 0 ? (
             <ul className="savings-directory-list">
-              {filteredMembers.map((member) => (
+              {filteredMembers.map((member, index) => {
+                const isMemberTransactionsExpanded = !collapsedMemberSavingsTransactions.has(member.name)
+                const memberTransactionsId = `member-savings-transactions-${index}`
+                return (
                 <li key={member.name} className="savings-directory-item">
                   <div className="savings-member-header">
                     <strong>{member.name}</strong>
@@ -1598,29 +1604,51 @@ function SavingsPage({
                     </form>
                   )}
                   <div className="savings-member-transactions">
-                    <h4>Savings transactions</h4>
-                    <ul>
-                      {getMemberSavingsTransactions(member).map((transaction) => (
-                        <li key={transaction.id}>
-                          <div>
-                            <strong>{transaction.type}</strong>
-                            <small>
-                              {formatDate(transaction.date)}
-                              {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
-                              {transaction.reason && ` · ${transaction.reason}`}
-                              {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                                && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
-                            </small>
-                          </div>
-                          <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                            {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="savings-member-transactions-header">
+                      <h4>Savings transactions</h4>
+                      <button
+                        type="button"
+                        className="secondary-button savings-summary-toggle"
+                        aria-label={`${isMemberTransactionsExpanded ? 'Collapse' : 'Expand'} ${member.name} savings transactions`}
+                        aria-expanded={isMemberTransactionsExpanded}
+                        aria-controls={memberTransactionsId}
+                        onClick={() => setCollapsedMemberSavingsTransactions((current) => {
+                          const next = new Set(current)
+                          if (next.has(member.name)) next.delete(member.name)
+                          else next.add(member.name)
+                          return next
+                        })}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" className={isMemberTransactionsExpanded ? 'expanded' : ''}>
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div id={memberTransactionsId} hidden={!isMemberTransactionsExpanded}>
+                      <ul>
+                        {getMemberSavingsTransactions(member).map((transaction) => (
+                          <li key={transaction.id}>
+                            <div>
+                              <strong>{transaction.type}</strong>
+                              <small>
+                                {formatDate(transaction.date)}
+                                {transaction.recordedBy && ` · Logged by ${transaction.recordedBy}`}
+                                {transaction.reason && ` · ${transaction.reason}`}
+                                {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                  && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                              </small>
+                            </div>
+                            <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                              {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           ) : (
             <p className="savings-history-empty">No members match “{memberSearch}”.</p>
@@ -1636,6 +1664,7 @@ function SavingsPage({
             <p className="eyebrow">Savings History</p>
             <h3>Savings transactions</h3>
           </div>
+          <div className="savings-history-header-actions">
           {isAdmin && (isClearConfirmationOpen ? (
             <form
               className="clear-loans-form clear-savings-form"
@@ -1695,30 +1724,45 @@ function SavingsPage({
               Clear all data
             </button>
           ))}
+            <button
+              type="button"
+              className="secondary-button savings-summary-toggle"
+              aria-label={`${isSavingsHistoryExpanded ? 'Collapse' : 'Expand'} savings history`}
+              aria-expanded={isSavingsHistoryExpanded}
+              aria-controls="savings-history-content"
+              onClick={() => setIsSavingsHistoryExpanded((expanded) => !expanded)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className={isSavingsHistoryExpanded ? 'expanded' : ''}>
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-        {savingsHistory.length > 0 ? (
-          <ul className="transaction-list savings-history-list">
-            {savingsHistory.map((transaction) => (
-              <li key={transaction.id} className="transaction-item">
-                <div>
-                  <strong>{transaction.type} · {transaction.member}</strong>
-                  <small>
-                    {formatDate(transaction.date)}
-                    {transaction.reason && ` · ${transaction.reason}`}
-                    {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                      && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
-                    {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
-                  </small>
-                </div>
-                <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                  {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No savings transactions for this selection yet.</p>
-        )}
+        <div id="savings-history-content" hidden={!isSavingsHistoryExpanded}>
+          {savingsHistory.length > 0 ? (
+            <ul className="transaction-list savings-history-list">
+              {savingsHistory.map((transaction) => (
+                <li key={transaction.id} className="transaction-item">
+                  <div>
+                    <strong>{transaction.type} · {transaction.member}</strong>
+                    <small>
+                      {formatDate(transaction.date)}
+                      {transaction.reason && ` · ${transaction.reason}`}
+                      {transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                        && ` · From ${formatCurrency(transaction.previousAmount)} to ${formatCurrency(transaction.newAmount)}`}
+                      {transaction.fee !== undefined && ` · 10% fee: ${formatCurrency(transaction.fee)}`}
+                    </small>
+                  </div>
+                  <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                    {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No savings transactions for this selection yet.</p>
+          )}
+        </div>
       </section>
     </main>
   )
@@ -2812,6 +2856,7 @@ function ProfitsPage({
   const [otherProfitSource, setOtherProfitSource] = useState('')
   const [otherProfitDate, setOtherProfitDate] = useState(getLocalDate)
   const [otherProfitError, setOtherProfitError] = useState('')
+  const [isMemberPayoutHistoryExpanded, setIsMemberPayoutHistoryExpanded] = useState(true)
   const [groupEncoderNames] = useState(() => [...new Set(
     loadGroupUpdateData().data.groupEncoders.map((encoder) => encoder.name.trim()).filter(Boolean),
   )])
@@ -3348,6 +3393,7 @@ function ProfitsPage({
             <p className="eyebrow">Member payouts</p>
             <h3>Profit transactions</h3>
           </div>
+          <div className="savings-history-header-actions">
           {isAdmin && (isClearConfirmationOpen ? (
             <form
               className="clear-loans-form clear-savings-form"
@@ -3407,28 +3453,47 @@ function ProfitsPage({
               Clear all data
             </button>
           ))}
+            <button
+              type="button"
+              className="secondary-button savings-summary-toggle"
+              aria-label={`${isMemberPayoutHistoryExpanded ? 'Collapse' : 'Expand'} member payout transaction history`}
+              aria-expanded={isMemberPayoutHistoryExpanded}
+              aria-controls="member-payout-history-content"
+              onClick={() => setIsMemberPayoutHistoryExpanded((expanded) => !expanded)}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+                className={isMemberPayoutHistoryExpanded ? 'expanded' : ''}
+              >
+                <path d="m6 9 6 6 6-6" />
+              </svg>
+            </button>
+          </div>
         </div>
-        {profitCashouts.length > 0 ? (
-          <ul className="profit-interest-list">
-            {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
-              <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
-                <span>{cashout.memberName} · {cashout.action === 'added to savings'
-                  ? 'Added to savings'
-                  : cashout.action === 'penalty'
-                    ? 'Penalty to group allowance'
-                    : cashout.action === 'encoder'
-                      ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
-                      : 'Cashout'}</span>
-                <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
-                  {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
-                </strong>
-                <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No profit transactions yet.</p>
-        )}
+        <div id="member-payout-history-content" hidden={!isMemberPayoutHistoryExpanded}>
+          {profitCashouts.length > 0 ? (
+            <ul className="profit-interest-list">
+              {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
+                <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
+                  <span>{cashout.memberName} · {cashout.action === 'added to savings'
+                    ? 'Added to savings'
+                    : cashout.action === 'penalty'
+                      ? 'Penalty to group allowance'
+                      : cashout.action === 'encoder'
+                        ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
+                        : 'Cashout'}</span>
+                  <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
+                    {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
+                  </strong>
+                  <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No profit transactions yet.</p>
+          )}
+        </div>
       </section>
     </main>
   )

@@ -937,6 +937,19 @@ p {
   transform: rotate(180deg);
 }
 
+.savings-member-transactions-header,
+.savings-history-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.savings-history-header-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .savings-directory-item {
   display: grid;
   gap: 12px;
