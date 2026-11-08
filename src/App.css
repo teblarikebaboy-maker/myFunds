@@ -826,6 +826,52 @@ p {
   list-style: none;
 }
 
+.monthly-savings-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.monthly-savings-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  color: #0f172a;
+  font-size: 0.85rem;
+}
+
+.monthly-savings-table th,
+.monthly-savings-table td {
+  min-width: 112px;
+  padding: 7px 12px;
+  border: 1px solid #94a3b8;
+  white-space: nowrap;
+}
+
+.monthly-savings-table thead th {
+  background: #f8fafc;
+  font-weight: 700;
+  text-align: center;
+}
+
+.monthly-savings-table thead th:first-child,
+.monthly-savings-table tbody th {
+  min-width: 80px;
+}
+
+.monthly-savings-table tbody th {
+  background: #f8fafc;
+  font-weight: 600;
+  text-align: left;
+}
+
+.monthly-savings-table tbody td {
+  background: #fff;
+  text-align: right;
+}
+
 .savings-directory-item {
   display: grid;
   gap: 12px;
@@ -1231,17 +1277,11 @@ p {
   margin: 0;
 }
 
-.loan-transactions {
-  display: grid;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.loan-transactions small {
-  color: #cbd5e1;
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.loan-history-toggle {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0.65rem 0.9rem;
+  white-space: nowrap;
 }
 
 .loan-transaction-list {
@@ -1305,12 +1345,6 @@ p {
 .transaction-type.interest-payment {
   background: rgba(244, 63, 94, 0.16);
   color: #fda4af;
-}
-
-.loan-transactions-empty {
-  margin: 0;
-  color: #94a3b8;
-  font-size: 0.8rem;
 }
 
 .borrower-item span {
@@ -2730,8 +2764,7 @@ p {
   background: #f8fafc;
 }
 
-.app-shell[data-theme='light'] .interest-payment-form label,
-.app-shell[data-theme='light'] .loan-transactions small {
+.app-shell[data-theme='light'] .interest-payment-form label {
   color: #475569;
 }
 
@@ -2772,10 +2805,6 @@ p {
 .app-shell[data-theme='light'] .transaction-type.principal-payment {
   background: #ffe4e6;
   color: #be123c;
-}
-
-.app-shell[data-theme='light'] .loan-transactions-empty {
-  color: #64748b;
 }
 
 .app-shell[data-theme='light'] .info-row {

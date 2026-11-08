@@ -396,6 +396,9 @@ const formatCurrency = (amount: number) =>
     maximumFractionDigits: 0,
   }).format(amount)
 
+const formatSavingsSummaryAmount = (amountCents: number) =>
+  new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(amountCents / 100)
+
 const formatBorrowerCurrency = (amount: number) =>
   new Intl.NumberFormat('en-PH', {
     style: 'currency',
@@ -1147,6 +1150,40 @@ function SavingsPage({
     .filter((member) => selectedMember === 'all' || member.name === selectedMember)
     .flatMap(getMemberSavingsTransactions)
     .sort((first, second) => second.date.localeCompare(first.date))
+  const monthlySavingsByMember = new Map<string, Map<string, number>>()
+  members.forEach((member) => {
+    const deposits = [
+      ...(member.initialSavings > 0
+        ? [{ amount: member.initialSavings, date: member.initialSavingsDate }]
+        : []),
+      ...member.contributions.filter((contribution) => contribution.amount > 0),
+    ]
+
+    deposits.forEach(({ amount, date }) => {
+      const month = /^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date) ? date.slice(0, 7) : ''
+      if (!month) return
+
+      const savingsByMember = monthlySavingsByMember.get(month) ?? new Map<string, number>()
+      savingsByMember.set(
+        member.name,
+        (savingsByMember.get(member.name) ?? 0) + Math.round(amount * 100),
+      )
+      monthlySavingsByMember.set(month, savingsByMember)
+    })
+  })
+  const recordedSavingsMonths = [...monthlySavingsByMember.keys()].sort()
+  const monthlySavingsRows: Array<{ month: string; amounts: Map<string, number> }> = []
+  if (recordedSavingsMonths.length > 0) {
+    const [startYear, startMonth] = recordedSavingsMonths[0].split('-').map(Number)
+    const [endYear, endMonth] = recordedSavingsMonths[recordedSavingsMonths.length - 1].split('-').map(Number)
+    const monthCount = (endYear - startYear) * 12 + endMonth - startMonth
+
+    for (let offset = 0; offset <= monthCount; offset += 1) {
+      const currentMonth = new Date(Date.UTC(startYear, startMonth - 1 + offset, 1))
+      const month = `${currentMonth.getUTCFullYear()}-${String(currentMonth.getUTCMonth() + 1).padStart(2, '0')}`
+      monthlySavingsRows.push({ month, amounts: monthlySavingsByMember.get(month) ?? new Map() })
+    }
+  }
 
   return (
     <main className="page-view">
@@ -1220,6 +1257,46 @@ function SavingsPage({
             <small>{goal.target} target</small>
           </article>
         ))}
+      </section>
+
+      <section className="panel full-width-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Savings Summary</p>
+            <h3>Monthly savings added</h3>
+          </div>
+        </div>
+        {monthlySavingsRows.length > 0 ? (
+          <div className="monthly-savings-table-wrap">
+            <table className="monthly-savings-table">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {monthlySavingsRows.map(({ month, amounts }) => {
+                  const [year, monthNumber] = month.split('-').map(Number)
+                  const monthLabel = new Date(Date.UTC(year, monthNumber - 1, 1))
+                    .toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+                  return (
+                    <tr key={month}>
+                      <th scope="row">{monthLabel}-{String(year).slice(-2)}</th>
+                      {members.map((member) => (
+                        <td key={member.name}>
+                          {formatSavingsSummaryAmount(amounts.get(member.name) ?? 0)}
+                        </td>
+                      ))}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="savings-history-empty">No savings deposits recorded yet.</p>
+        )}
       </section>
 
       <section className="panel full-width-panel savings-directory-panel">
@@ -1620,6 +1697,7 @@ function LoansPage({
   const [editedPrincipalAmount, setEditedPrincipalAmount] = useState('')
   const [principalEditReason, setPrincipalEditReason] = useState('')
   const [principalEditError, setPrincipalEditError] = useState('')
+  const [isLoanHistoryExpanded, setIsLoanHistoryExpanded] = useState(false)
   const [borrowerSearch, setBorrowerSearch] = useState('')
   const [borrowerDirectoryFilter, setBorrowerDirectoryFilter] = useState<BorrowerDirectoryFilter>('all')
   const [isClearConfirmationOpen, setIsClearConfirmationOpen] = useState(false)
@@ -2225,83 +2303,83 @@ function LoansPage({
                   </div>
                 </div>
                 <div className="borrower-ledger">
-                  <table className="borrower-ledger-table">
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Principal</th>
-                        <th>Interest</th>
-                        <th>Pay Interest</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        const ledgerRowsByDate = new Map<string, {
-                          id: string
-                          date: string
-                          principal: number
-                          interest: number
-                          payInterest: number
-                        }>()
+                      <table className="borrower-ledger-table">
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Principal</th>
+                            <th>Interest</th>
+                            <th>Pay Interest</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const ledgerRowsByDate = new Map<string, {
+                              id: string
+                              date: string
+                              principal: number
+                              interest: number
+                              payInterest: number
+                            }>()
 
-                        borrower.transactions.forEach((transaction) => {
-                          const existingRow = ledgerRowsByDate.get(transaction.date) ?? {
-                            id: transaction.date,
-                            date: transaction.date,
-                            principal: 0,
-                            interest: 0,
-                            payInterest: 0,
-                          }
+                            borrower.transactions.forEach((transaction) => {
+                              const existingRow = ledgerRowsByDate.get(transaction.date) ?? {
+                                id: transaction.date,
+                                date: transaction.date,
+                                principal: 0,
+                                interest: 0,
+                                payInterest: 0,
+                              }
 
-                          if (transaction.type === 'loan') {
-                            existingRow.principal += transaction.amount
-                          } else if (transaction.type === 'principal-payment') {
-                            existingRow.principal -= transaction.amount
-                          } else if (transaction.type === 'principal-addition') {
-                            existingRow.principal += transaction.amount
-                          } else if (transaction.type === 'principal-adjustment'
-                            && transaction.previousAmount !== undefined
-                            && transaction.newAmount !== undefined) {
-                            existingRow.principal += transaction.newAmount - transaction.previousAmount
-                          } else if (transaction.type === 'interest') {
-                            existingRow.interest += transaction.amount
-                          } else if (transaction.type === 'interest-payment') {
-                            existingRow.payInterest += transaction.amount
-                          }
+                              if (transaction.type === 'loan') {
+                                existingRow.principal += transaction.amount
+                              } else if (transaction.type === 'principal-payment') {
+                                existingRow.principal -= transaction.amount
+                              } else if (transaction.type === 'principal-addition') {
+                                existingRow.principal += transaction.amount
+                              } else if (transaction.type === 'principal-adjustment'
+                                && transaction.previousAmount !== undefined
+                                && transaction.newAmount !== undefined) {
+                                existingRow.principal += transaction.newAmount - transaction.previousAmount
+                              } else if (transaction.type === 'interest') {
+                                existingRow.interest += transaction.amount
+                              } else if (transaction.type === 'interest-payment') {
+                                existingRow.payInterest += transaction.amount
+                              }
 
-                          ledgerRowsByDate.set(transaction.date, existingRow)
-                        })
+                              ledgerRowsByDate.set(transaction.date, existingRow)
+                            })
 
-                        const ledgerRows = [...ledgerRowsByDate.values()]
-                          .filter((row) => row.principal !== 0 || row.interest !== 0 || row.payInterest !== 0)
-                          .sort((first, second) => first.date.localeCompare(second.date))
+                            const ledgerRows = [...ledgerRowsByDate.values()]
+                              .filter((row) => row.principal !== 0 || row.interest !== 0 || row.payInterest !== 0)
+                              .sort((first, second) => first.date.localeCompare(second.date))
 
-                        if (ledgerRows.length === 0) {
-                          return (
-                            <tr>
-                              <td colSpan={4} className="borrower-ledger-empty">No loan transactions yet.</td>
-                            </tr>
-                          )
-                        }
+                            if (ledgerRows.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={4} className="borrower-ledger-empty">No loan transactions yet.</td>
+                                </tr>
+                              )
+                            }
 
-                        return ledgerRows.map((row) => {
-                          const displayDate = new Date(`${row.date}T00:00:00`).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: '2-digit',
-                          }).replace(' ', '-')
+                            return ledgerRows.map((row) => {
+                              const displayDate = new Date(`${row.date}T00:00:00`).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: '2-digit',
+                              }).replace(' ', '-')
 
-                          return (
-                            <tr key={row.id}>
-                              <td>{displayDate}</td>
-                              <td className={row.principal < 0 ? 'negative' : ''}>{formatBorrowerCurrency(row.principal)}</td>
-                              <td>{formatBorrowerCurrency(row.interest)}</td>
-                              <td>{formatBorrowerCurrency(row.payInterest)}</td>
-                            </tr>
-                          )
-                        })
-                      })()}
-                    </tbody>
-                  </table>
+                              return (
+                                <tr key={row.id}>
+                                  <td>{displayDate}</td>
+                                  <td className={row.principal < 0 ? 'negative' : ''}>{formatBorrowerCurrency(row.principal)}</td>
+                                  <td>{formatBorrowerCurrency(row.interest)}</td>
+                                  <td>{formatBorrowerCurrency(row.payInterest)}</td>
+                                </tr>
+                              )
+                            })
+                          })()}
+                        </tbody>
+                      </table>
                 </div>
                 {payingBorrowerId === borrower.id && (
                   <form
@@ -2512,44 +2590,55 @@ function LoansPage({
             <p className="eyebrow">Loan History</p>
             <h3>Loan transactions</h3>
           </div>
+          <button
+            type="button"
+            className="secondary-button loan-history-toggle"
+            aria-expanded={isLoanHistoryExpanded}
+            aria-controls="loan-history-content"
+            onClick={() => setIsLoanHistoryExpanded((expanded) => !expanded)}
+          >
+            {isLoanHistoryExpanded ? 'Hide history' : 'Show history'}
+          </button>
         </div>
-        {loanHistory.length > 0 ? (
-          <ul className="transaction-list savings-history-list">
-            {loanHistory.map((transaction) => (
-              <li key={`${transaction.borrowerId}-${transaction.id}`} className="transaction-item loan-history-item">
-                <div>
-                  <strong>
-                    {transaction.type === 'interest-payment'
-                      ? 'Interest paid'
-                      : transaction.type === 'principal-payment'
-                        ? 'Principal paid'
-                        : transaction.type === 'principal-addition'
-                          ? 'Principal added'
-                          : transaction.type === 'principal-adjustment'
-                            ? 'Principal edited'
-                          : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
-                    {' · '}{transaction.borrowerName}
-                  </strong>
-                  <small>{formatDate(transaction.date)}</small>
-                  {transaction.type === 'principal-adjustment' && transaction.reason && (
-                    <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
-                  )}
-                </div>
-                {transaction.type === 'principal-adjustment'
-                  && transaction.previousAmount !== undefined
-                  && transaction.newAmount !== undefined ? (
-                    <span>{formatCurrency(transaction.previousAmount)} → {formatCurrency(transaction.newAmount)}</span>
-                  ) : (
-                    <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
-                      {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
-                    </span>
-                  )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">No loan transactions yet.</p>
-        )}
+        <div id="loan-history-content" hidden={!isLoanHistoryExpanded}>
+          {loanHistory.length > 0 ? (
+            <ul className="transaction-list savings-history-list">
+              {loanHistory.map((transaction) => (
+                <li key={`${transaction.borrowerId}-${transaction.id}`} className="transaction-item loan-history-item">
+                  <div>
+                    <strong>
+                      {transaction.type === 'interest-payment'
+                        ? 'Interest paid'
+                        : transaction.type === 'principal-payment'
+                          ? 'Principal paid'
+                          : transaction.type === 'principal-addition'
+                            ? 'Principal added'
+                            : transaction.type === 'principal-adjustment'
+                              ? 'Principal edited'
+                            : transaction.type === 'interest' ? 'Interest added' : 'Loan issued'}
+                      {' · '}{transaction.borrowerName}
+                    </strong>
+                    <small>{formatDate(transaction.date)}</small>
+                    {transaction.type === 'principal-adjustment' && transaction.reason && (
+                      <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
+                    )}
+                  </div>
+                  {transaction.type === 'principal-adjustment'
+                    && transaction.previousAmount !== undefined
+                    && transaction.newAmount !== undefined ? (
+                      <span>{formatCurrency(transaction.previousAmount)} → {formatCurrency(transaction.newAmount)}</span>
+                    ) : (
+                      <span className={transaction.amount < 0 ? 'negative' : 'positive'}>
+                        {transaction.amount < 0 ? '-' : '+'}{formatCurrency(Math.abs(transaction.amount))}
+                      </span>
+                    )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="savings-history-empty">No loan transactions yet.</p>
+          )}
+        </div>
       </section>
 
     </main>
