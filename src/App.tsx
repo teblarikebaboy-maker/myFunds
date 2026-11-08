@@ -2207,10 +2207,101 @@ function LoansPage({
                   </form>
                 )}
                 <div className="borrower-metrics">
-                  {borrower.guarantorName && <span><strong>Guarantor:</strong> {borrower.guarantorName}</span>}
-                  <span className="borrower-metric principal-metric"><strong>Principal:</strong> {formatBorrowerCurrency(borrower.loanAmount)}</span>
-                  <span className="borrower-metric interest-metric"><strong>Rate:</strong> {borrower.interestRate}%</span>
-                  <span className="borrower-metric interest-metric"><strong>Interest:</strong> {formatBorrowerCurrency(borrower.paydayInterest)}</span>
+                  <div className="borrower-metric principal-metric">
+                    <span>Current Principal</span>
+                    <strong>{formatBorrowerCurrency(borrower.loanAmount)}</strong>
+                  </div>
+                  <div className="borrower-metric interest-metric">
+                    <span>Current Interest</span>
+                    <strong>{formatBorrowerCurrency(borrower.paydayInterest)}</strong>
+                  </div>
+                  <div className="borrower-metric received-interest-metric">
+                    <span>Received Interest</span>
+                    <strong>{formatBorrowerCurrency(
+                      borrower.transactions
+                        .filter((transaction) => transaction.type === 'interest-payment')
+                        .reduce((total, transaction) => total + transaction.amount, 0),
+                    )}</strong>
+                  </div>
+                </div>
+                <div className="borrower-ledger">
+                  <table className="borrower-ledger-table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Principal</th>
+                        <th>Interest</th>
+                        <th>Pay Interest</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const ledgerRowsByDate = new Map<string, {
+                          id: string
+                          date: string
+                          principal: number
+                          interest: number
+                          payInterest: number
+                        }>()
+
+                        borrower.transactions.forEach((transaction) => {
+                          const existingRow = ledgerRowsByDate.get(transaction.date) ?? {
+                            id: transaction.date,
+                            date: transaction.date,
+                            principal: 0,
+                            interest: 0,
+                            payInterest: 0,
+                          }
+
+                          if (transaction.type === 'loan') {
+                            existingRow.principal += transaction.amount
+                          } else if (transaction.type === 'principal-payment') {
+                            existingRow.principal -= transaction.amount
+                          } else if (transaction.type === 'principal-addition') {
+                            existingRow.principal += transaction.amount
+                          } else if (transaction.type === 'principal-adjustment'
+                            && transaction.previousAmount !== undefined
+                            && transaction.newAmount !== undefined) {
+                            existingRow.principal += transaction.newAmount - transaction.previousAmount
+                          } else if (transaction.type === 'interest') {
+                            existingRow.interest += transaction.amount
+                          } else if (transaction.type === 'interest-payment') {
+                            existingRow.payInterest += transaction.amount
+                          }
+
+                          ledgerRowsByDate.set(transaction.date, existingRow)
+                        })
+
+                        const ledgerRows = [...ledgerRowsByDate.values()]
+                          .filter((row) => row.principal !== 0 || row.interest !== 0 || row.payInterest !== 0)
+                          .sort((first, second) => first.date.localeCompare(second.date))
+
+                        if (ledgerRows.length === 0) {
+                          return (
+                            <tr>
+                              <td colSpan={4} className="borrower-ledger-empty">No loan transactions yet.</td>
+                            </tr>
+                          )
+                        }
+
+                        return ledgerRows.map((row) => {
+                          const displayDate = new Date(`${row.date}T00:00:00`).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: '2-digit',
+                          }).replace(' ', '-')
+
+                          return (
+                            <tr key={row.id}>
+                              <td>{displayDate}</td>
+                              <td className={row.principal < 0 ? 'negative' : ''}>{formatBorrowerCurrency(row.principal)}</td>
+                              <td>{formatBorrowerCurrency(row.interest)}</td>
+                              <td>{formatBorrowerCurrency(row.payInterest)}</td>
+                            </tr>
+                          )
+                        })
+                      })()}
+                    </tbody>
+                  </table>
                 </div>
                 {payingBorrowerId === borrower.id && (
                   <form
@@ -2397,39 +2488,6 @@ function LoansPage({
                     {principalAdditionError && <p className="member-error" role="alert">{principalAdditionError}</p>}
                   </form>
                 )}
-                <div className="loan-transactions">
-                  <small>Loan transactions</small>
-                  {borrower.transactions && borrower.transactions.length > 0 ? (
-                    <ul className="loan-transaction-list">
-                      {borrower.transactions.map((transaction) => (
-                        <li key={transaction.id} className="loan-transaction-item">
-                          <span className={`transaction-type ${transaction.type}`}>
-                            {transaction.type === 'interest-payment'
-                              ? 'Interest paid'
-                              : transaction.type === 'principal-payment'
-                                ? 'Principal paid'
-                                : transaction.type === 'principal-addition'
-                                  ? 'Principal added'
-                                  : transaction.type === 'principal-adjustment'
-                                    ? 'Principal edited'
-                                  : transaction.type === 'interest' ? 'Interest' : 'Loan'}
-                          </span>
-                          <strong>
-                              {transaction.type === 'principal-adjustment' && transaction.previousAmount !== undefined && transaction.newAmount !== undefined
-                                ? `${formatBorrowerCurrency(transaction.previousAmount)} → ${formatBorrowerCurrency(transaction.newAmount)}`
-                                : `${transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}${formatBorrowerCurrency(transaction.amount)}`}
-                          </strong>
-                          <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
-                          {transaction.type === 'principal-adjustment' && transaction.reason && (
-                              <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="loan-transactions-empty">No loan transactions yet.</p>
-                  )}
-                </div>
               </li>
             ))}
                   </ul>
