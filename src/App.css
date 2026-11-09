@@ -223,15 +223,19 @@ p {
   gap: 12px;
 }
 
-.undo-transaction-button {
+.secondary-button.undo-transaction-button {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
   width: 42px;
   height: 42px;
   padding: 0;
-  font-size: 1.65rem;
-  line-height: 1;
+}
+
+.undo-transaction-button svg {
+  display: block;
+  width: 20px;
+  height: 20px;
 }
 
 .undo-transaction-button:disabled {
@@ -913,6 +917,47 @@ p {
   font-weight: 700;
 }
 
+.app-shell[data-theme='dark'] .monthly-savings-table-wrap {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: #0f172a;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table {
+  color: #e2e8f0;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table th,
+.app-shell[data-theme='dark'] .monthly-savings-table td {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table .savings-summary-half-row th,
+.app-shell[data-theme='dark'] .monthly-savings-table .savings-summary-year-row th {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table .savings-summary-column-row th {
+  background: #26364d;
+  color: #f1f5f9;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table tbody th {
+  background: #172338;
+  color: #cbd5e1;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table tbody td {
+  background: #111c2f;
+  color: #e2e8f0;
+}
+
+.app-shell[data-theme='dark'] .monthly-savings-table .savings-summary-total-row th,
+.app-shell[data-theme='dark'] .monthly-savings-table .savings-summary-total-row td {
+  background: #134e4a;
+  color: #ccfbf1;
+}
+
 .savings-summary-toggle {
   display: grid;
   flex: 0 0 auto;
@@ -1298,6 +1343,70 @@ p {
 .borrower-ledger-empty {
   text-align: center;
   color: #64748b;
+}
+
+.app-shell[data-theme='dark'] .borrower-metrics {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: #0f172a;
+}
+
+.app-shell[data-theme='dark'] .borrower-metric {
+  border-right-color: rgba(148, 163, 184, 0.24);
+  color: #f1f5f9;
+}
+
+.app-shell[data-theme='dark'] .borrower-metric span {
+  color: #cbd5e1;
+}
+
+.app-shell[data-theme='dark'] .borrower-metric strong {
+  color: #f8fafc;
+}
+
+.app-shell[data-theme='dark'] .principal-metric {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: #123047;
+}
+
+.app-shell[data-theme='dark'] .interest-metric {
+  border-color: rgba(74, 222, 128, 0.24);
+  background: #12352c;
+}
+
+.app-shell[data-theme='dark'] .received-interest-metric {
+  border-color: rgba(251, 191, 36, 0.24);
+  background: #3a2d16;
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: #111c2f;
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-table {
+  color: #e2e8f0;
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-table th,
+.app-shell[data-theme='dark'] .borrower-ledger-table td {
+  border-bottom-color: rgba(148, 163, 184, 0.2);
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-table th {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-table tbody tr:nth-child(even) td {
+  background: rgba(30, 41, 59, 0.46);
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-table .negative {
+  color: #fda4af;
+}
+
+.app-shell[data-theme='dark'] .borrower-ledger-empty {
+  color: #94a3b8;
 }
 
 .borrower-actions {
@@ -2183,6 +2292,27 @@ p {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 10px;
   background: rgba(30, 41, 59, 0.72);
+}
+
+.app-shell[data-theme='dark'] .loan-history-item {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.94), rgba(15, 23, 42, 0.92));
+}
+
+.app-shell[data-theme='dark'] .loan-history-item strong {
+  color: #f1f5f9;
+}
+
+.app-shell[data-theme='dark'] .loan-history-item small {
+  color: #94a3b8;
+}
+
+.app-shell[data-theme='dark'] .loan-history-item .positive {
+  color: #6ee7b7;
+}
+
+.app-shell[data-theme='dark'] .loan-history-item .negative {
+  color: #fda4af;
 }
 
 .savings-history-empty {

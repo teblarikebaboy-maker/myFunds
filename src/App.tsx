@@ -424,9 +424,9 @@ const formatCurrency = (amount: number) =>
 const formatSavingsSummaryAmount = (amountCents: number) =>
   new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(amountCents / 100)
 
-const savingsSummaryYear = 2027
+const savingsSummaryYear = 2026
 const getSavingsScheduleDates = () => {
-  const dates = ['2026-12-30']
+  const dates = ['2025-12-30']
   for (let month = 0; month < 12; month += 1) {
     const monthPrefix = `${savingsSummaryYear}-${String(month + 1).padStart(2, '0')}`
     dates.push(`${monthPrefix}-15`)
@@ -1206,7 +1206,7 @@ function SavingsPage({
 
     deposits.forEach(({ amount, date }) => {
       if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
-      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2026-12-30') return
+      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2025-12-30') return
       if (date === `${savingsSummaryYear}-12-30`) return
 
       const savingsByMember = savingsByDateAndMember.get(date) ?? new Map<string, number>()
@@ -3188,6 +3188,8 @@ function ProfitsPage({
         ))}
       </section>
 
+      <MemberProfitSummary memberProfits={memberProfits} />
+
       <section className="panel full-width-panel profits-section profits-other-section">
         <div className="panel-header">
           <div>
@@ -3277,7 +3279,6 @@ function ProfitsPage({
           </p>
         )}
       </section>
-      <MemberProfitSummary memberProfits={memberProfits} />
       <section className="panel full-width-panel profits-section profits-members-section">
         <div className="panel-header">
           <div>
@@ -5933,7 +5934,18 @@ function App() {
                     setIsUndoPasswordOpen(true)
                   }}
                 >
-                  <span aria-hidden="true">↶</span>
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M9 14 4 9l5-5" />
+                    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H13" />
+                  </svg>
                 </button>
               )}
               <button
