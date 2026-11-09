@@ -1,0 +1,85 @@
+Since you're a starter developer, I'd avoid the huge platforms first (like Upwork) because they can be difficult when you have 0 reviews and no portfolio.
+
+Instead, I'd focus on sites where clients are more willing to work with newer freelancers.
+
+1. Contra ⭐ My top recommendation
+No commission fees for freelancers.
+Less saturated than Upwork.
+Good for React, web development, UI, and portfolio-based work.
+Clients often care more about your projects than your work history.
+
+What to offer:
+
+React landing pages
+Business websites
+Bug fixes
+Portfolio websites
+2. Freelancer.com
+Lots of competition, but easier to get first jobs than Upwork.
+Many small projects ($10-$100) suitable for beginners.
+Clients frequently post simple HTML, CSS, JavaScript, and React work.
+
+Strategy:
+
+Bid only on jobs posted within the last hour.
+Start with fixed-price projects.
+3. PeoplePerHour
+Smaller marketplace.
+Less crowded than Upwork.
+Popular with UK clients.
+Good for website maintenance and small business sites.
+4. Guru
+Older platform but still active.
+Less hype and competition.
+Good for long-term clients who need website updates and maintenance.
+5. OnlineJobs.ph ⭐ Excellent if you're in the Philippines
+Many employers specifically hire Filipinos.
+Lower competition than global platforms.
+Opportunities for:
+Front-end development
+WordPress
+Virtual assistance + web work
+Website maintenance
+6. Facebook Groups (Underrated)
+
+Search for:
+
+Web Developer Philippines
+Startup PH Jobs
+Online Filipino Freelancers
+ReactJS Philippines
+
+Many small businesses need:
+
+Company websites
+Internal tools
+Landing pages
+Bug fixes
+
+You can often land your first client faster than on a freelance platform.
+
+What I'd do if I were you
+
+You mentioned:
+
+You're currently working as a maintenance technician.
+You're learning web development.
+Budget is important.
+Family time matters.
+
+I would spend the next 30 days building 3 projects:
+
+Personal portfolio (React)
+Small inventory system
+Company maintenance dashboard
+
+Then:
+
+Publish them on GitHub.
+Host them on Vercel.
+Create profiles on Contra and OnlineJobs.ph.
+Apply to 5-10 small jobs per day.
+
+Your first realistic freelance income is usually ₱2,000-₱10,000/month part-time. After you collect reviews and real projects, reaching ₱20,000-₱50,000/month becomes much more achievable.
+
+For someone with your maintenance background, a maintenance management web app or equipment downtime tracker is actually a unique portfolio project because you understand a real industry problem that many developers do not.
