@@ -111,7 +111,10 @@ const getMemberProfitShares = (
   const legacyCashoutsByMember = new Map<string, number>()
   const encoderDeductionsByMember = new Map<string, number>()
   profitCashouts.forEach((cashout) => {
-    if (cashout.action !== 'penalty' && cashout.action !== 'encoder' && cashout.transferTotal !== undefined) {
+    if (cashout.action !== 'penalty'
+      && cashout.action !== 'encoder'
+      && cashout.action !== 'allocation'
+      && cashout.transferTotal !== undefined) {
       settledTransfersByMember.set(
         cashout.memberName,
         Math.max(settledTransfersByMember.get(cashout.memberName) ?? 0, cashout.transferTotal),
@@ -145,7 +148,8 @@ const getMemberProfitShares = (
       }
     } else if (cashout.transferTotal === undefined
       && cashout.action !== 'added to savings'
-      && cashout.action !== 'encoder') {
+      && cashout.action !== 'encoder'
+      && cashout.action !== 'allocation') {
       legacyCashoutsByMember.set(
         cashout.memberName,
         (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
@@ -166,6 +170,29 @@ const getMemberProfitShares = (
     const profitShare = Number(Math.max(0, grossProfitShare - legacyCashouts - penaltyDeductions - encoderDeductions).toFixed(2))
     return { member, sharePercentage, profitShare }
   })
+}
+
+const getMemberProfitAllocations = (members: Member[], amount: number) => {
+  const totalCents = Math.round(amount * 100)
+  const savingsTotal = members.reduce((total, member) => total + getMemberProfitShareSavings(member), 0)
+  if (totalCents <= 0 || savingsTotal <= 0) return []
+
+  const allocations = members.map((member, index) => {
+    const rawCents = totalCents * getMemberProfitShareSavings(member) / savingsTotal
+    const cents = Math.floor(rawCents)
+    return { memberName: member.name, index, cents, remainder: rawCents - cents }
+  })
+  let remainingCents = totalCents - allocations.reduce((total, allocation) => total + allocation.cents, 0)
+  const largestRemainders = [...allocations].sort((first, second) =>
+    second.remainder - first.remainder || first.index - second.index,
+  )
+  largestRemainders.slice(0, remainingCents).forEach((allocation) => {
+    allocations[allocation.index].cents += 1
+  })
+
+  return allocations
+    .filter((allocation) => allocation.cents > 0)
+    .map(({ memberName, cents }) => ({ memberName, amount: cents / 100 }))
 }
 
 const getMemberSavingsTransactions = (member: Member): SavingsTransaction[] => [
@@ -443,6 +470,15 @@ const formatBorrowerCurrency = (amount: number) =>
     maximumFractionDigits: 2,
   }).format(amount)
 
+const getInitialBorrowerLoanAmount = (borrower: Borrower) => {
+  if (Number.isFinite(borrower.initialLoanAmount) && borrower.initialLoanAmount >= 0) {
+    return borrower.initialLoanAmount
+  }
+  const originalLoan = borrower.transactions?.find((transaction) => transaction.type === 'loan')?.amount
+  if (originalLoan !== undefined && Number.isFinite(originalLoan) && originalLoan >= 0) return originalLoan
+  return Number.isFinite(borrower.loanAmount) && borrower.loanAmount >= 0 ? borrower.loanAmount : 0
+}
+
 const formatPercentage = (value: number) => `${value.toFixed(1)}%`
 
 const hasOutstandingBorrowerBalance = (amount: number) => Math.round(amount * 100) !== 0
@@ -456,6 +492,45 @@ const getTotalInterestPaid = (borrowers: Borrower[], removedTransactions: Remove
   + removedTransactions.reduce((total, { transaction }) =>
     total + (transaction.type === 'interest-payment' ? transaction.amount : 0),
   0)
+
+type ProfitSourceAllocation = { id: string; amount: number; date: string }
+
+const getTransferredByProfitSource = (
+  profitSources: ProfitSourceAllocation[],
+  transfers: ProfitTransfer[],
+) => {
+  const transferredByPayment = new Map<string, number>()
+  transfers.forEach((transfer) => transfer.paymentAllocations?.forEach((allocation) => {
+    if (!Number.isFinite(allocation.amount) || allocation.amount <= 0) return
+    transferredByPayment.set(
+      allocation.transactionId,
+      (transferredByPayment.get(allocation.transactionId) ?? 0) + allocation.amount,
+    )
+  }))
+
+  const orderedSources = [...profitSources].sort((first, second) => first.date.localeCompare(second.date))
+  transfers
+    .filter((transfer) => !transfer.paymentAllocations?.length)
+    .sort((first, second) => first.date.localeCompare(second.date))
+    .forEach((transfer) => {
+      let remainingTransfer = transfer.amount
+      const periodFrom = transfer.periodFrom ?? ''
+      const periodTo = transfer.periodTo ?? transfer.date
+      orderedSources.forEach((source) => {
+        if (remainingTransfer <= 0
+          || source.date < periodFrom
+          || source.date > periodTo) return
+        const alreadyTransferred = transferredByPayment.get(source.id) ?? 0
+        const availableAmount = Math.max(0, source.amount - alreadyTransferred)
+        const allocatedAmount = Number(Math.min(availableAmount, remainingTransfer).toFixed(2))
+        if (allocatedAmount <= 0) return
+        transferredByPayment.set(source.id, alreadyTransferred + allocatedAmount)
+        remainingTransfer = Number((remainingTransfer - allocatedAmount).toFixed(2))
+      })
+    })
+
+  return transferredByPayment
+}
 
 const getLocalDate = () => {
   const date = new Date()
@@ -1817,7 +1892,7 @@ function LoansPage({
   onAddBorrower: (borrower: Borrower) => void
   onAddBorrowerInterest: (borrowerId: string, date: string) => void
   onPayBorrowerInterest: (borrowerId: string, amount: number, date: string) => void
-  onPayBorrowerPrincipal: (borrowerId: string, amount: number) => void
+  onPayBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
   onAddBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
   onEditBorrowerPrincipal: (borrowerId: string, amount: number, reason: string, date: string) => void
   onRemoveBorrower: (borrowerId: string) => void
@@ -1839,6 +1914,7 @@ function LoansPage({
   const [interestAdditionError, setInterestAdditionError] = useState('')
   const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
+  const [principalPaymentDate, setPrincipalPaymentDate] = useState(getLocalDate)
   const [principalPaymentError, setPrincipalPaymentError] = useState('')
   const [addingPrincipalBorrowerId, setAddingPrincipalBorrowerId] = useState<string | null>(null)
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
@@ -1934,6 +2010,7 @@ function LoansPage({
       name,
       guarantorName,
       email: '',
+      initialLoanAmount: loanAmountCents / 100,
       loanAmount: loanAmountCents / 100,
       interestRate,
       paydayInterest: 0,
@@ -2025,6 +2102,10 @@ function LoansPage({
       setPrincipalPaymentError('Pay all outstanding interest before paying principal.')
       return
     }
+    if (!principalPaymentDate) {
+      setPrincipalPaymentError('Select the date the principal payment was received.')
+      return
+    }
     const amount = Number(principalPaymentAmount)
     if (principalPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
       setPrincipalPaymentError('Enter an amount greater than zero.')
@@ -2040,9 +2121,10 @@ function LoansPage({
       return
     }
 
-    onPayBorrowerPrincipal(borrower.id, roundedAmount)
+    onPayBorrowerPrincipal(borrower.id, roundedAmount, principalPaymentDate)
     setPayingPrincipalBorrowerId(null)
     setPrincipalPaymentAmount('')
+    setPrincipalPaymentDate(getLocalDate())
     setPrincipalPaymentError('')
   }
 
@@ -2312,10 +2394,7 @@ function LoansPage({
                 <div className="borrower-item-header">
                   <div className="borrower-name-principal">
                     <strong>{borrower.name}</strong>
-                    <span>Initial principal: {formatBorrowerCurrency(
-                      borrower.transactions.find((transaction) => transaction.type === 'loan')?.amount
-                      ?? borrower.loanAmount,
-                    )}</span>
+                    <span>Initial loan: {formatBorrowerCurrency(getInitialBorrowerLoanAmount(borrower))}</span>
                   </div>
                   <div className="borrower-actions">
                     <button
@@ -2342,6 +2421,7 @@ function LoansPage({
                       onClick={() => {
                         setPayingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
                         setPrincipalPaymentAmount('')
+                        setPrincipalPaymentDate(getLocalDate())
                         setPrincipalPaymentError('')
                         setPayingBorrowerId(null)
                       }}
@@ -2586,6 +2666,18 @@ function LoansPage({
                     noValidate
                     onSubmit={(event) => handlePayBorrowerPrincipal(event, borrower)}
                   >
+                    <label>
+                      Date received
+                      <input
+                        type="date"
+                        required
+                        value={principalPaymentDate}
+                        onChange={(event) => {
+                          setPrincipalPaymentDate(event.target.value)
+                          setPrincipalPaymentError('')
+                        }}
+                      />
+                    </label>
                     <label>
                       Payment amount (up to {formatBorrowerCurrency(borrower.loanAmount)})
                       <input
@@ -2839,7 +2931,6 @@ function ProfitsPage({
   profitTransfers,
   otherProfits,
   profitCashouts,
-  totalInterestPaid,
   totalReceivableInterest,
   totalGroupAllowance,
   isAdmin,
@@ -2855,7 +2946,6 @@ function ProfitsPage({
   profitTransfers: ProfitTransfer[]
   otherProfits: OtherProfit[]
   profitCashouts: ProfitCashout[]
-  totalInterestPaid: number
   totalReceivableInterest: number
   totalGroupAllowance: number
   isAdmin: boolean
@@ -2900,7 +2990,6 @@ function ProfitsPage({
   const selectedProfitTransferTotal = profitTransfers
     .filter((transfer) => transfer.date === activeProfitTransferDate)
     .reduce((total, transfer) => total + transfer.amount, 0)
-  const profitBalance = Number(Math.max(0, totalInterestPaid + otherProfitTotal - profitTransferred).toFixed(2))
   const profitSources = [
     ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
       .filter((transaction) => transaction.type === 'interest-payment')
@@ -2925,13 +3014,17 @@ function ProfitsPage({
       date: profit.date,
     })),
   ].sort((first, second) => second.date.localeCompare(first.date))
-  const transferredByPayment = new Map<string, number>()
-  profitTransfers.forEach((transfer) => transfer.paymentAllocations?.forEach((allocation) => {
-    transferredByPayment.set(
-      allocation.transactionId,
-      (transferredByPayment.get(allocation.transactionId) ?? 0) + allocation.amount,
-    )
-  }))
+  const transferredByPayment = getTransferredByProfitSource(profitSources, profitTransfers)
+  const filteredProfitSources = profitSources.filter((payment) =>
+    (!profitDateFrom || payment.date >= profitDateFrom)
+    && (!profitDateTo || payment.date <= profitDateTo),
+  )
+  const selectedProfitTotal = filteredProfitSources.reduce((total, payment) => total + payment.amount, 0)
+  const selectedTransferredTotal = filteredProfitSources.reduce(
+    (total, payment) => total + (transferredByPayment.get(payment.id) ?? 0),
+    0,
+  )
+  const profitBalance = Number(Math.max(0, selectedProfitTotal - selectedTransferredTotal).toFixed(2))
   const availableTransferPayments = profitSources.filter((payment) =>
     (!transferDateFrom || payment.date >= transferDateFrom)
     && (!transferDateTo || payment.date <= transferDateTo),
@@ -2940,10 +3033,6 @@ function ProfitsPage({
     availableAmount: Number(Math.max(0, payment.amount - (transferredByPayment.get(payment.id) ?? 0)).toFixed(2)),
   })).filter((payment) => payment.availableAmount > 0)
   const availableTransferTotal = availableTransferPayments.reduce((total, payment) => total + payment.availableAmount, 0)
-  const filteredProfitSources = profitSources.filter((payment) =>
-    (!profitDateFrom || payment.date >= profitDateFrom)
-    && (!profitDateTo || payment.date <= profitDateTo),
-  )
   const searchedProfitSources = filteredProfitSources.filter((payment) =>
     payment.borrowerName.toLowerCase().includes(paymentSearch.trim().toLowerCase()),
   )
@@ -3027,7 +3116,8 @@ function ProfitsPage({
   const memberProfitAlreadyPaid = profitCashouts.some((cashout) =>
     cashout.transferTotal === distributedProfitTotal
     && cashout.action !== 'encoder'
-    && cashout.action !== 'penalty',
+    && cashout.action !== 'penalty'
+    && cashout.action !== 'allocation',
   )
   const canSendToEncoder = isAdmin
     && groupEncoderNames.length > 0
@@ -3123,7 +3213,6 @@ function ProfitsPage({
                   <button
                     type="button"
                     className="primary-button"
-                    disabled={profitBalance <= 0}
                     onClick={() => {
                       setTransferDateFrom(profitDateFrom)
                       setTransferDateTo(profitDateTo)
@@ -3164,12 +3253,12 @@ function ProfitsPage({
                         />
                       </label>
                     </div>
-                    <strong>Available to transfer: {formatCurrency(Math.min(availableTransferTotal, profitBalance))}</strong>
+                    <strong>Available to transfer: {formatCurrency(availableTransferTotal)}</strong>
                     <div className="profit-transfer-actions">
                       <button
                         type="button"
                         className="primary-button"
-                        disabled={availableTransferTotal <= 0 || profitBalance <= 0}
+                        disabled={availableTransferTotal <= 0}
                         onClick={() => {
                           onTransferProfit(transferDateFrom, transferDateTo)
                           setIsTransferFormOpen(false)
@@ -3506,13 +3595,15 @@ function ProfitsPage({
                 <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
                   <span>{cashout.memberName} · {cashout.action === 'added to savings'
                     ? 'Added to savings'
+                    : cashout.action === 'allocation'
+                      ? 'Profit allocated'
                     : cashout.action === 'penalty'
                       ? 'Penalty to group allowance'
                       : cashout.action === 'encoder'
                         ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
                         : 'Cashout'}</span>
-                  <strong className={cashout.action === 'added to savings' ? 'positive' : 'negative'}>
-                    {cashout.action === 'added to savings' ? '+' : '-'}{formatCurrency(cashout.amount)}
+                  <strong className={cashout.action === 'added to savings' || cashout.action === 'allocation' ? 'positive' : 'negative'}>
+                    {cashout.action === 'added to savings' || cashout.action === 'allocation' ? '+' : '-'}{formatCurrency(cashout.amount)}
                   </strong>
                   <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
                 </li>
@@ -5042,7 +5133,8 @@ function App() {
     const transferTotal = Number(profitTransfers.reduce((total, transfer) => total + transfer.amount, 0).toFixed(2))
     if (profitCashouts.some((cashout) =>
       cashout.transferTotal === transferTotal
-      && cashout.action !== 'penalty')) return
+      && cashout.action !== 'penalty'
+      && cashout.action !== 'allocation')) return
     const date = getLocalDate()
     const payouts = payments.map(({ memberName, amount }) => ({
       memberName,
@@ -5056,7 +5148,8 @@ function App() {
     setProfitCashouts((currentCashouts) => {
       if (currentCashouts.some((cashout) =>
         cashout.transferTotal === transferTotal
-        && cashout.action !== 'penalty')) return currentCashouts
+        && cashout.action !== 'penalty'
+        && cashout.action !== 'allocation')) return currentCashouts
       return [...currentCashouts, ...payouts]
     })
   }
@@ -5064,45 +5157,40 @@ function App() {
   const transferProfit = (dateFrom: string, dateTo: string) => {
     if (signedInRole !== 'admin') return
     const createTransfer = (currentTransfers: ProfitTransfer[]) => {
-      const transferred = currentTransfers.reduce((total, transfer) => total + transfer.amount, 0)
-      let balance = Number(Math.max(0, totalInterestPaid + totalOtherProfit - transferred).toFixed(2))
-      const allocatedByPayment = new Map<string, number>()
-      currentTransfers.forEach((transfer) => transfer.paymentAllocations?.forEach((allocation) => {
-        allocatedByPayment.set(
-          allocation.transactionId,
-          (allocatedByPayment.get(allocation.transactionId) ?? 0) + allocation.amount,
-        )
-      }))
-      const eligiblePayments = [
+      const profitSources = [
         ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
           .filter((transaction) => transaction.type === 'interest-payment')
           .map((transaction) => ({
-            transactionId: `${borrower.id}-${transaction.id}`,
+            id: `${borrower.id}-${transaction.id}`,
             amount: transaction.amount,
             date: transaction.date,
           }))),
         ...removedBorrowerTransactions
           .filter(({ transaction }) => transaction.type === 'interest-payment')
           .map(({ borrowerId, transaction }) => ({
-            transactionId: `${borrowerId}-${transaction.id}`,
+            id: `${borrowerId}-${transaction.id}`,
             amount: transaction.amount,
             date: transaction.date,
           })),
         ...otherProfits.map((profit) => ({
-          transactionId: `other-profit-${profit.id}`,
+          id: `other-profit-${profit.id}`,
           amount: profit.amount,
           date: profit.date,
         })),
-      ].filter((payment) => payment.date >= dateFrom && payment.date <= dateTo)
+      ]
+      const allocatedByPayment = getTransferredByProfitSource(profitSources, currentTransfers)
+      const eligiblePayments = profitSources
+        .filter((payment) =>
+          (!dateFrom || payment.date >= dateFrom)
+          && (!dateTo || payment.date <= dateTo),
+        )
         .sort((first, second) => first.date.localeCompare(second.date))
       const paymentAllocations: Array<{ transactionId: string; amount: number }> = []
       eligiblePayments.forEach((payment) => {
-        if (balance <= 0) return
-        const availableAmount = Math.max(0, payment.amount - (allocatedByPayment.get(payment.transactionId) ?? 0))
-        const amount = Number(Math.min(availableAmount, balance).toFixed(2))
+        const availableAmount = Math.max(0, payment.amount - (allocatedByPayment.get(payment.id) ?? 0))
+        const amount = Number(availableAmount.toFixed(2))
         if (amount <= 0) return
-        paymentAllocations.push({ transactionId: payment.transactionId, amount })
-        balance = Number((balance - amount).toFixed(2))
+        paymentAllocations.push({ transactionId: payment.id, amount })
       })
       const amount = paymentAllocations.reduce((total, allocation) => total + allocation.amount, 0)
       return amount > 0
@@ -5115,12 +5203,24 @@ function App() {
         }
         : null
     }
-    if (!createTransfer(profitTransfers)) return
+    const transfer = createTransfer(profitTransfers)
+    if (!transfer) return
     rememberTransactionUndo('profit transfer')
-    setProfitTransfers((currentTransfers) => {
-      const transfer = createTransfer(currentTransfers)
-      return transfer ? [...currentTransfers, transfer] : currentTransfers
-    })
+    const transferTotal = Number((
+      profitTransfers.reduce((total, currentTransfer) => total + currentTransfer.amount, 0)
+      + transfer.amount
+    ).toFixed(2))
+    const allocationTransactions = getMemberProfitAllocations(members, transfer.amount).map(({ memberName, amount }) => ({
+      memberName,
+      amount,
+      date: transfer.date,
+      action: 'allocation' as const,
+      transferTotal,
+    }))
+    setProfitTransfers((currentTransfers) => [...currentTransfers, transfer])
+    if (allocationTransactions.length > 0) {
+      setProfitCashouts((currentCashouts) => [...currentCashouts, ...allocationTransactions])
+    }
   }
 
   const pullOutSavings = (
@@ -5422,8 +5522,8 @@ function App() {
     }))
   }
 
-  const payBorrowerPrincipal = (borrowerId: string, amount: number) => {
-    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
+  const payBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0 || !date) return
     const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
     if (!borrower || hasOutstandingBorrowerBalance(borrower.paydayInterest) || amount > borrower.loanAmount) return
     rememberTransactionUndo('principal payment')
@@ -5436,7 +5536,7 @@ function App() {
         id: crypto.randomUUID(),
         type: 'principal-payment' as const,
         amount,
-        date: getLocalDate(),
+        date,
       }
       return {
         ...borrower,
@@ -5824,7 +5924,6 @@ function App() {
           profitTransfers={profitTransfers}
           otherProfits={otherProfits}
           profitCashouts={profitCashouts}
-          totalInterestPaid={totalInterestPaid}
           totalReceivableInterest={totalReceivableInterest}
           totalGroupAllowance={totalGroupAllowance}
           isAdmin={signedInRole === 'admin'}

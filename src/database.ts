@@ -81,7 +81,7 @@ export type ProfitCashout = {
   memberName: string
   amount: number
   date: string
-  action?: 'cashout' | 'added to savings' | 'penalty' | 'encoder'
+  action?: 'cashout' | 'added to savings' | 'penalty' | 'encoder' | 'allocation'
   transferTotal?: number
   encoderName?: string
 }
@@ -98,6 +98,7 @@ export type Borrower = {
   name: string
   email?: string
   guarantorName?: string
+  initialLoanAmount: number
   loanAmount: number
   interestRate: number
   paydayInterest: number
@@ -518,6 +519,7 @@ export const readWorkbookData = async (
   })
 
   const borrowers: Borrower[] = []
+  const savedInitialLoanAmounts = new Map<string, number | undefined>()
   const borrowersSheet = workbook.getWorksheet('Borrowers')
   const borrowerHeaders = new Map<string, number>()
   borrowersSheet?.getRow(1).eachCell((cell, columnNumber) => {
@@ -532,6 +534,18 @@ export const readWorkbookData = async (
     const name = String(getBorrowerCell(row, 'Name', 2) ?? '').trim()
     if (!id || !name) return
     const loanAmount = Number(getBorrowerCell(row, 'Loan Amount (PHP)', 6)) || 0
+    const initialLoanAmountValue = borrowerHeaders.has('Initial Loan Amount (PHP)')
+      ? getBorrowerCell(row, 'Initial Loan Amount (PHP)', 10)
+      : undefined
+    const savedInitialLoanAmount = Number(initialLoanAmountValue)
+    const initialLoanAmount = initialLoanAmountValue !== null
+      && initialLoanAmountValue !== undefined
+      && initialLoanAmountValue !== ''
+      && Number.isFinite(savedInitialLoanAmount)
+      && savedInitialLoanAmount >= 0
+      ? savedInitialLoanAmount
+      : undefined
+    savedInitialLoanAmounts.set(id, initialLoanAmount)
     const interestRateValue = getBorrowerCell(row, 'Interest Rate (%)', 9)
     const savedInterestRate = Number(interestRateValue)
     const interestRate = interestRateValue === null
@@ -559,6 +573,7 @@ export const readWorkbookData = async (
       name,
       email: String(getBorrowerCell(row, 'Email', 3) ?? '').trim(),
       guarantorName: String(getBorrowerCell(row, 'Guarantor', legacyTransactionsColumn ? 8 : 7) ?? '').trim(),
+      initialLoanAmount: initialLoanAmount ?? loanAmount,
       loanAmount,
       interestRate,
       paydayInterest,
@@ -596,6 +611,11 @@ export const readWorkbookData = async (
       date,
       ...adjustmentDetails,
     })
+  })
+  borrowers.forEach((borrower) => {
+    if (savedInitialLoanAmounts.get(borrower.id) !== undefined) return
+    borrower.initialLoanAmount = borrower.transactions.find((transaction) => transaction.type === 'loan')?.amount
+      ?? borrower.loanAmount
   })
 
   const removedBorrowerTransactions: RemovedBorrowerTransaction[] = []
@@ -694,7 +714,10 @@ export const readWorkbookData = async (
     const amount = getCellNumber(row.getCell(2).value, `${memberName || 'Unknown member'}, profit cashout`)
     const date = getCellDate(row.getCell(3).value)
     const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
-    const action = actionValue === 'added to savings' || actionValue === 'penalty' || actionValue === 'encoder'
+    const action = actionValue === 'added to savings'
+      || actionValue === 'penalty'
+      || actionValue === 'encoder'
+      || actionValue === 'allocation'
       ? actionValue
       : 'cashout'
     const transferTotalCell = row.getCell(5).value
@@ -744,7 +767,10 @@ export const readWorkbookData = async (
     const amount = Number(row.getCell(2).value)
     const date = getCellDate(row.getCell(3).value)
     const actionValue = String(row.getCell(4).value ?? '').trim().toLowerCase()
-    const action = actionValue === 'added to savings' || actionValue === 'penalty' || actionValue === 'encoder'
+    const action = actionValue === 'added to savings'
+      || actionValue === 'penalty'
+      || actionValue === 'encoder'
+      || actionValue === 'allocation'
       ? actionValue
       : 'cashout'
     const transferTotalValue = Number(row.getCell(5).value)
@@ -895,6 +921,7 @@ export const writeWorkbookData = async (
       { name: 'Total Interest (PHP)' },
       { name: 'Guarantor' },
       { name: 'Interest Rate (%)' },
+      { name: 'Initial Loan Amount (PHP)' },
     ],
     rows: borrowers.map((borrower) => [
       borrower.id,
@@ -905,6 +932,7 @@ export const writeWorkbookData = async (
       borrower.paydayInterest,
       borrower.guarantorName ?? '',
       borrower.interestRate,
+      borrower.initialLoanAmount,
     ]),
   })
 
