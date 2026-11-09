@@ -872,6 +872,25 @@ p {
   font-weight: 400;
 }
 
+.savings-summary-half-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.savings-summary-half-toggle:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
 .monthly-savings-table .savings-summary-column-row th {
   text-align: center;
 }
@@ -967,9 +986,11 @@ p {
   place-items: center;
 }
 
-.savings-summary-toggle svg {
+.savings-summary-toggle svg,
+.savings-summary-half-toggle svg {
   width: 18px;
   height: 18px;
+  flex: 0 0 auto;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -978,7 +999,8 @@ p {
   transition: transform 0.18s ease;
 }
 
-.savings-summary-toggle svg.expanded {
+.savings-summary-toggle svg.expanded,
+.savings-summary-half-toggle svg.expanded {
   transform: rotate(180deg);
 }
 

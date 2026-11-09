@@ -1035,7 +1035,7 @@ function SavingsPage({
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
-  const [isSavingsSummaryExpanded, setIsSavingsSummaryExpanded] = useState(true)
+  const [collapsedSavingsSummaryHalves, setCollapsedSavingsSummaryHalves] = useState<Set<string>>(() => new Set())
   const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(false)
   const [expandedMemberSavingsTransactions, setExpandedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
@@ -1318,37 +1318,45 @@ function SavingsPage({
             <p className="eyebrow">Savings Summary</p>
             <h3>Savings contribution schedule</h3>
           </div>
-          <button
-            type="button"
-            className="secondary-button savings-summary-toggle"
-            aria-label={isSavingsSummaryExpanded ? 'Collapse savings summary' : 'Expand savings summary'}
-            aria-expanded={isSavingsSummaryExpanded}
-            aria-controls="savings-summary-content"
-            onClick={() => setIsSavingsSummaryExpanded((expanded) => !expanded)}
-          >
-            <svg
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-              className={isSavingsSummaryExpanded ? 'expanded' : ''}
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </button>
         </div>
-        <div id="savings-summary-content" hidden={!isSavingsSummaryExpanded}>
-          {members.length > 0 ? (
-            <div className="monthly-savings-table-wrap">
-              <table className="monthly-savings-table">
-                <tbody>
-                  {savingsSummarySections.map(({ label, rows }, sectionIndex) => (
-                    <Fragment key={label}>
+        {members.length > 0 ? (
+          <div className="monthly-savings-table-wrap">
+            <table className="monthly-savings-table">
+              {savingsSummarySections.map(({ label, rows }, sectionIndex) => {
+                const isExpanded = !collapsedSavingsSummaryHalves.has(label)
+                const sectionContentId = `savings-summary-${sectionIndex}-content`
+                const firstHalfIsExpanded = !collapsedSavingsSummaryHalves.has('1st Half')
+                return (
+                  <Fragment key={label}>
+                    <tbody>
                       <tr className="savings-summary-half-row">
-                        <th scope="rowgroup" colSpan={members.length + 1}>{label}</th>
+                        <th scope="rowgroup" colSpan={members.length + 1}>
+                          <button
+                            type="button"
+                            className="savings-summary-half-toggle"
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${label} savings contributions`}
+                            aria-expanded={isExpanded}
+                            aria-controls={sectionContentId}
+                            onClick={() => setCollapsedSavingsSummaryHalves((current) => {
+                              const next = new Set(current)
+                              if (next.has(label)) next.delete(label)
+                              else next.add(label)
+                              return next
+                            })}
+                          >
+                            <span>{label}</span>
+                            <svg viewBox="0 0 24 24" aria-hidden="true" className={isExpanded ? 'expanded' : ''}>
+                              <path d="m6 9 6 6 6-6" />
+                            </svg>
+                          </button>
+                        </th>
                       </tr>
+                    </tbody>
+                    <tbody id={sectionContentId} hidden={!isExpanded}>
                       <tr className="savings-summary-year-row">
                         <th scope="rowgroup" colSpan={members.length + 1}>{savingsSummaryYear}</th>
                       </tr>
-                      {sectionIndex === 0 && (
+                      {(sectionIndex === 0 || !firstHalfIsExpanded) && (
                         <tr className="savings-summary-column-row">
                           <th scope="col">Date</th>
                           {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
@@ -1390,15 +1398,15 @@ function SavingsPage({
                           </td>
                         ))}
                       </tr>
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="savings-history-empty">Add members to view the savings schedule.</p>
-          )}
-        </div>
+                    </tbody>
+                  </Fragment>
+                )
+              })}
+            </table>
+          </div>
+        ) : (
+          <p className="savings-history-empty">Add members to view the savings schedule.</p>
+        )}
       </section>
 
       <section className="panel full-width-panel savings-directory-panel">
