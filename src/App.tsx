@@ -41,6 +41,13 @@ import './App.css'
 
 type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data' | 'group-update'
 type BorrowerDirectoryFilter = 'all' | 'active' | 'paid'
+type BorrowerTransactionInput = {
+  principalAddition?: number
+  principalPayment?: number
+  addInterest?: boolean
+  interestPayment?: number
+  date: string
+}
 type ChartStyle = 'bar' | 'line'
 type GroupAnnouncement = { id: string; title: string; message: string; date: string }
 type SavingsTransaction = {
@@ -114,6 +121,7 @@ const getMemberProfitShares = (
     if (cashout.action !== 'penalty'
       && cashout.action !== 'encoder'
       && cashout.action !== 'allocation'
+      && cashout.action !== 'allowance adjustment'
       && cashout.transferTotal !== undefined) {
       settledTransfersByMember.set(
         cashout.memberName,
@@ -149,7 +157,8 @@ const getMemberProfitShares = (
     } else if (cashout.transferTotal === undefined
       && cashout.action !== 'added to savings'
       && cashout.action !== 'encoder'
-      && cashout.action !== 'allocation') {
+      && cashout.action !== 'allocation'
+      && cashout.action !== 'allowance adjustment') {
       legacyCashoutsByMember.set(
         cashout.memberName,
         (legacyCashoutsByMember.get(cashout.memberName) ?? 0) + cashout.amount,
@@ -1267,8 +1276,9 @@ function SavingsPage({
     .flatMap(getMemberSavingsTransactions)
     .sort((first, second) => second.date.localeCompare(first.date))
   const savingsByDateAndMember = new Map<string, Map<string, number>>()
+  const previousSavingsByDateAndMember = new Map<string, Map<string, number>>()
   members.forEach((member) => {
-    const deposits = [
+    const savingsEntries = [
       ...(member.initialSavings > 0
         ? [{ amount: member.initialSavings, date: member.initialSavingsDate }]
         : []),
@@ -1277,10 +1287,23 @@ function SavingsPage({
         amount: -withdrawal.amount,
         date: withdrawal.date,
       })),
+      ...(member.adjustments ?? []).map((adjustment) => ({
+        amount: adjustment.newAmount - adjustment.previousAmount,
+        date: adjustment.date,
+      })),
     ]
 
-    deposits.forEach(({ amount, date }) => {
+    savingsEntries.forEach(({ amount, date }) => {
       if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
+      if (date < `${savingsSummaryYear}-01-01` && date !== '2025-12-30') {
+        const previousSavingsByMember = previousSavingsByDateAndMember.get(date) ?? new Map<string, number>()
+        previousSavingsByMember.set(
+          member.name,
+          (previousSavingsByMember.get(member.name) ?? 0) + Math.round(amount * 100),
+        )
+        previousSavingsByDateAndMember.set(date, previousSavingsByMember)
+        return
+      }
       if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2025-12-30') return
       if (date === `${savingsSummaryYear}-12-30`) return
 
@@ -1308,10 +1331,18 @@ function SavingsPage({
   ]
   const isSavingsDateExcluded = (date: string) =>
     members.length > 0 && members.every((member) => member.excludedSavingsDates?.includes(date))
+  const getPreviousSavingsTotal = (memberName: string) =>
+    [...previousSavingsByDateAndMember].reduce(
+      (total, [date, amounts]) =>
+        total + (isSavingsDateExcluded(date) ? 0 : amounts.get(memberName) ?? 0),
+      0,
+    )
   const getSavingsScheduleTotal = (rows: typeof savingsScheduleRows, memberName: string) =>
     rows.reduce((total, row) =>
       total + (isSavingsDateExcluded(row.date) ? 0 : row.amounts.get(memberName) ?? 0),
     0)
+  const getFirstHalfSavingsTotal = (memberName: string) =>
+    getPreviousSavingsTotal(memberName) + getSavingsScheduleTotal(firstHalfRows, memberName)
 
   return (
     <main className="page-view">
@@ -1437,6 +1468,30 @@ function SavingsPage({
                           {members.map((member) => <th scope="col" key={member.name}>{member.name}</th>)}
                         </tr>
                       )}
+                      {sectionIndex === 0 && (
+                        <tr className="savings-summary-previous-row">
+                          <th scope="row">Previous savings</th>
+                          {members.map((member) => (
+                            <td key={member.name}>
+                              <span className="savings-summary-row-value">
+                                {formatSavingsSummaryAmount(getPreviousSavingsTotal(member.name))}
+                              </span>
+                            </td>
+                          ))}
+                        </tr>
+                      )}
+                      {sectionIndex === 1 && (
+                        <tr className="savings-summary-previous-row">
+                          <th scope="row">1st Half total</th>
+                          {members.map((member) => (
+                            <td key={member.name}>
+                              <span className="savings-summary-row-value">
+                                {formatSavingsSummaryAmount(getFirstHalfSavingsTotal(member.name))}
+                              </span>
+                            </td>
+                          ))}
+                        </tr>
+                      )}
                       {rows.map(({ date, amounts }) => {
                         const dateLabel = new Date(`${date}T00:00:00Z`)
                           .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' })
@@ -1469,7 +1524,12 @@ function SavingsPage({
                         <th scope="row">TOTAL</th>
                         {members.map((member) => (
                           <td key={member.name}>
-                            {formatSavingsSummaryAmount(getSavingsScheduleTotal(rows, member.name))}
+                            {formatSavingsSummaryAmount(
+                              getSavingsScheduleTotal(rows, member.name)
+                              + (sectionIndex === 0
+                                ? getPreviousSavingsTotal(member.name)
+                                : getFirstHalfSavingsTotal(member.name)),
+                            )}
                           </td>
                         ))}
                       </tr>
@@ -1876,10 +1936,7 @@ function LoansPage({
   availableFunds,
   isAdmin,
   onAddBorrower,
-  onAddBorrowerInterest,
-  onPayBorrowerInterest,
-  onPayBorrowerPrincipal,
-  onAddBorrowerPrincipal,
+  onTransactBorrower,
   onEditBorrowerPrincipal,
   onRemoveBorrower,
   onClearLoans,
@@ -1890,10 +1947,7 @@ function LoansPage({
   availableFunds: number
   isAdmin: boolean
   onAddBorrower: (borrower: Borrower) => void
-  onAddBorrowerInterest: (borrowerId: string, date: string) => void
-  onPayBorrowerInterest: (borrowerId: string, amount: number, date: string) => void
-  onPayBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
-  onAddBorrowerPrincipal: (borrowerId: string, amount: number, date: string) => void
+  onTransactBorrower: (borrowerId: string, transaction: BorrowerTransactionInput) => void
   onEditBorrowerPrincipal: (borrowerId: string, amount: number, reason: string, date: string) => void
   onRemoveBorrower: (borrowerId: string) => void
   onClearLoans: (adminPassword: string, confirmationText: string) => Promise<{ success: boolean; message?: string }>
@@ -1905,21 +1959,13 @@ function LoansPage({
   const [borrowerLoanAmount, setBorrowerLoanAmount] = useState('')
   const [borrowerInterestRate, setBorrowerInterestRate] = useState('3')
   const [borrowerError, setBorrowerError] = useState('')
-  const [payingBorrowerId, setPayingBorrowerId] = useState<string | null>(null)
-  const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
-  const [interestPaymentDate, setInterestPaymentDate] = useState(getLocalDate)
-  const [interestPaymentError, setInterestPaymentError] = useState('')
-  const [addingInterestBorrowerId, setAddingInterestBorrowerId] = useState<string | null>(null)
-  const [interestAdditionDate, setInterestAdditionDate] = useState(getLocalDate)
-  const [interestAdditionError, setInterestAdditionError] = useState('')
-  const [payingPrincipalBorrowerId, setPayingPrincipalBorrowerId] = useState<string | null>(null)
-  const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
-  const [principalPaymentDate, setPrincipalPaymentDate] = useState(getLocalDate)
-  const [principalPaymentError, setPrincipalPaymentError] = useState('')
-  const [addingPrincipalBorrowerId, setAddingPrincipalBorrowerId] = useState<string | null>(null)
+  const [transactingBorrowerId, setTransactingBorrowerId] = useState<string | null>(null)
   const [principalAdditionAmount, setPrincipalAdditionAmount] = useState('')
-  const [principalAdditionDate, setPrincipalAdditionDate] = useState(getLocalDate)
-  const [principalAdditionError, setPrincipalAdditionError] = useState('')
+  const [principalPaymentAmount, setPrincipalPaymentAmount] = useState('')
+  const [interestAdditionSelected, setInterestAdditionSelected] = useState(false)
+  const [interestPaymentAmount, setInterestPaymentAmount] = useState('')
+  const [borrowerTransactionDate, setBorrowerTransactionDate] = useState(getLocalDate)
+  const [borrowerTransactionError, setBorrowerTransactionError] = useState('')
   const [editingPrincipalBorrowerId, setEditingPrincipalBorrowerId] = useState<string | null>(null)
   const [editedPrincipalAmount, setEditedPrincipalAmount] = useState('')
   const [principalEditReason, setPrincipalEditReason] = useState('')
@@ -1933,6 +1979,8 @@ function LoansPage({
   const [clearLoansError, setClearLoansError] = useState('')
   const [isClearingLoans, setIsClearingLoans] = useState(false)
   const availableFundsCents = Math.max(0, Math.round(availableFunds * 100))
+  const getInterestAdditionPreview = (borrower: Borrower) =>
+    Number(((borrower.loanAmount + (Number(principalAdditionAmount) || 0)) * borrower.interestRate / 100).toFixed(2))
   const totalLoanProceeds = borrowers.reduce((total, borrower) => total + borrower.loanAmount, 0)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const filteredBorrowers = borrowers.filter((borrower) =>
@@ -2056,108 +2104,82 @@ function LoansPage({
     }
   }
 
-  const handlePayBorrowerInterest = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
-    event.preventDefault()
-    const amount = Number(interestPaymentAmount)
-    if (interestPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setInterestPaymentError('Enter an amount greater than zero.')
-      return
-    }
-    const roundedAmount = Number(amount.toFixed(2))
-    if (roundedAmount <= 0) {
-      setInterestPaymentError('Enter an amount of at least 0.01.')
-      return
-    }
-    if (roundedAmount > borrower.paydayInterest) {
-      setInterestPaymentError('Payment cannot exceed the current interest due.')
-      return
-    }
-    if (!interestPaymentDate) {
-      setInterestPaymentError('Select the date the payment was received.')
-      return
-    }
-
-    onPayBorrowerInterest(borrower.id, roundedAmount, interestPaymentDate)
-    setPayingBorrowerId(null)
-    setInterestPaymentAmount('')
-    setInterestPaymentDate(getLocalDate())
-    setInterestPaymentError('')
-  }
-
-  const handleAddBorrowerInterest = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
-    event.preventDefault()
-    if (!interestAdditionDate) {
-      setInterestAdditionError('Select the date the interest was added.')
-      return
-    }
-
-    onAddBorrowerInterest(borrower.id, interestAdditionDate)
-    setAddingInterestBorrowerId(null)
-    setInterestAdditionError('')
-  }
-
-  const handlePayBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
-    event.preventDefault()
-    if (hasOutstandingBorrowerBalance(borrower.paydayInterest)) {
-      setPrincipalPaymentError('Pay all outstanding interest before paying principal.')
-      return
-    }
-    if (!principalPaymentDate) {
-      setPrincipalPaymentError('Select the date the principal payment was received.')
-      return
-    }
-    const amount = Number(principalPaymentAmount)
-    if (principalPaymentAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setPrincipalPaymentError('Enter an amount greater than zero.')
-      return
-    }
-    const roundedAmount = Number(amount.toFixed(2))
-    if (roundedAmount <= 0) {
-      setPrincipalPaymentError('Enter an amount of at least 0.01.')
-      return
-    }
-    if (roundedAmount > borrower.loanAmount) {
-      setPrincipalPaymentError('Payment cannot exceed the outstanding principal.')
-      return
-    }
-
-    onPayBorrowerPrincipal(borrower.id, roundedAmount, principalPaymentDate)
-    setPayingPrincipalBorrowerId(null)
-    setPrincipalPaymentAmount('')
-    setPrincipalPaymentDate(getLocalDate())
-    setPrincipalPaymentError('')
-  }
-
-  const handleAddBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
-    event.preventDefault()
-    if (!principalAdditionDate) {
-      setPrincipalAdditionError('Select the date the principal was added.')
-      return
-    }
-    const amount = Number(principalAdditionAmount)
-    if (principalAdditionAmount === '' || !Number.isFinite(amount) || amount <= 0) {
-      setPrincipalAdditionError('Enter an amount greater than zero.')
-      return
-    }
-    const roundedAmount = Number(amount.toFixed(2))
-    if (!Number.isFinite(roundedAmount) || roundedAmount <= 0) {
-      setPrincipalAdditionError('Enter an amount of at least 0.01.')
-      return
-    }
-    if (availableFundsCents <= 0) {
-      setPrincipalAdditionError('No available funds to add to this loan.')
-      return
-    }
-    if (Math.round(roundedAmount * 100) > availableFundsCents) {
-      setPrincipalAdditionError(`Amount cannot exceed available funds of ${formatCurrency(availableFundsCents / 100)}.`)
-      return
-    }
-
-    onAddBorrowerPrincipal(borrower.id, roundedAmount, principalAdditionDate)
-    setAddingPrincipalBorrowerId(null)
+  const closeBorrowerTransaction = () => {
+    setTransactingBorrowerId(null)
     setPrincipalAdditionAmount('')
-    setPrincipalAdditionDate(getLocalDate())
-    setPrincipalAdditionError('')
+    setPrincipalPaymentAmount('')
+    setInterestAdditionSelected(false)
+    setInterestPaymentAmount('')
+    setBorrowerTransactionDate(getLocalDate())
+    setBorrowerTransactionError('')
+    setEditingPrincipalBorrowerId(null)
+  }
+
+  const handleBorrowerTransaction = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
+    event.preventDefault()
+    if (!borrowerTransactionDate) {
+      setBorrowerTransactionError('Select the transaction date.')
+      return
+    }
+
+    const parseOptionalAmount = (value: string, label: string) => {
+      if (!value.trim()) return 0
+      const amount = Number(value)
+      const roundedAmount = Number(amount.toFixed(2))
+      if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(roundedAmount) || roundedAmount < 0.01) {
+        setBorrowerTransactionError(`${label} must be at least 0.01.`)
+        return null
+      }
+      return roundedAmount
+    }
+    const principalAddition = parseOptionalAmount(principalAdditionAmount, 'Principal to add')
+    if (principalAddition === null) return
+    const principalPayment = parseOptionalAmount(principalPaymentAmount, 'Principal payment')
+    if (principalPayment === null) return
+    const interestPayment = parseOptionalAmount(interestPaymentAmount, 'Interest payment')
+    if (interestPayment === null) return
+
+    if (principalAddition === 0 && principalPayment === 0 && !interestAdditionSelected && interestPayment === 0) {
+      setBorrowerTransactionError('Enter or select at least one transaction.')
+      return
+    }
+    const principalAdditionCents = Math.round(principalAddition * 100)
+    const principalPaymentCents = Math.round(principalPayment * 100)
+    const availableFundsAfterPayment = availableFundsCents + principalPaymentCents
+    if (principalAdditionCents > availableFundsAfterPayment) {
+      setBorrowerTransactionError(`Principal added cannot exceed available funds of ${formatCurrency(availableFundsAfterPayment / 100)}.`)
+      return
+    }
+    if (principalPayment > borrower.loanAmount + principalAddition) {
+      setBorrowerTransactionError('Principal payment cannot exceed the principal available after any addition.')
+      return
+    }
+    if (interestAdditionSelected && !hasOutstandingBorrowerBalance(borrower.loanAmount + principalAddition)) {
+      setBorrowerTransactionError('Interest can only be added to a loan with outstanding principal.')
+      return
+    }
+    const interestToAdd = interestAdditionSelected
+      ? Number(((borrower.loanAmount + principalAddition) * borrower.interestRate / 100).toFixed(2))
+      : 0
+    const interestDueAfterAccrual = Number((borrower.paydayInterest + interestToAdd).toFixed(2))
+    if (interestPayment > interestDueAfterAccrual) {
+      setBorrowerTransactionError(`Interest payment cannot exceed the amount due after accrual (${formatBorrowerCurrency(interestDueAfterAccrual)}).`)
+      return
+    }
+    const interestRemaining = Number((interestDueAfterAccrual - interestPayment).toFixed(2))
+    if (principalPayment > 0 && hasOutstandingBorrowerBalance(interestRemaining)) {
+      setBorrowerTransactionError('Pay all outstanding interest before paying principal.')
+      return
+    }
+
+    onTransactBorrower(borrower.id, {
+      principalAddition,
+      principalPayment,
+      addInterest: interestAdditionSelected,
+      interestPayment,
+      date: borrowerTransactionDate,
+    })
+    closeBorrowerTransaction()
   }
 
   const handleEditBorrowerPrincipal = (event: FormEvent<HTMLFormElement>, borrower: Borrower) => {
@@ -2402,76 +2424,35 @@ function LoansPage({
                       className="secondary-button borrower-interest-button"
                       disabled={!isAdmin}
                       onClick={() => {
-                        setAddingInterestBorrowerId((currentId) =>
-                          currentId === borrower.id ? null : borrower.id,
-                        )
-                        setInterestAdditionDate(getLocalDate())
-                        setInterestAdditionError('')
-                        setPayingBorrowerId(null)
-                        setPayingPrincipalBorrowerId(null)
-                        setAddingPrincipalBorrowerId(null)
+                        if (transactingBorrowerId === borrower.id) {
+                          closeBorrowerTransaction()
+                          return
+                        }
+                        closeBorrowerTransaction()
+                        setTransactingBorrowerId(borrower.id)
+                        setBorrowerTransactionDate(getLocalDate())
+                        setBorrowerTransactionError('')
                       }}
                     >
-                      Add interest
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button borrower-interest-button"
-                      disabled={!isAdmin || borrower.loanAmount <= 0 || hasOutstandingBorrowerBalance(borrower.paydayInterest)}
-                      onClick={() => {
-                        setPayingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
-                        setPrincipalPaymentAmount('')
-                        setPrincipalPaymentDate(getLocalDate())
-                        setPrincipalPaymentError('')
-                        setPayingBorrowerId(null)
-                      }}
-                    >
-                      Pay principal
+                      Transact
                     </button>
                     <button
                       type="button"
                       className="secondary-button borrower-interest-button"
                       disabled={!isAdmin}
                       onClick={() => {
-                        setAddingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
-                        setPrincipalAdditionAmount('')
-                        setPrincipalAdditionDate(getLocalDate())
-                        setPrincipalAdditionError('')
-                        setPayingPrincipalBorrowerId(null)
-                        setPayingBorrowerId(null)
-                      }}
-                    >
-                      Add principal
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button borrower-interest-button"
-                      disabled={!isAdmin}
-                      onClick={() => {
-                        setEditingPrincipalBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
+                        if (editingPrincipalBorrowerId === borrower.id) {
+                          setEditingPrincipalBorrowerId(null)
+                          return
+                        }
+                        closeBorrowerTransaction()
+                        setEditingPrincipalBorrowerId(borrower.id)
                         setEditedPrincipalAmount(borrower.loanAmount.toFixed(2))
                         setPrincipalEditReason('')
                         setPrincipalEditError('')
-                        setAddingPrincipalBorrowerId(null)
-                        setPayingPrincipalBorrowerId(null)
-                        setPayingBorrowerId(null)
                       }}
                     >
                       Edit principal
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button borrower-interest-button"
-                      disabled={!isAdmin || borrower.paydayInterest <= 0}
-                      onClick={() => {
-                        setPayingBorrowerId((currentId) => currentId === borrower.id ? null : borrower.id)
-                        setInterestPaymentAmount('')
-                        setInterestPaymentDate(getLocalDate())
-                        setInterestPaymentError('')
-                        setPayingPrincipalBorrowerId(null)
-                      }}
-                    >
-                      Pay interest
                     </button>
                     <button
                       type="button"
@@ -2483,36 +2464,100 @@ function LoansPage({
                     </button>
                   </div>
                 </div>
-                {isAdmin && addingInterestBorrowerId === borrower.id && (
+                {isAdmin && transactingBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
                     noValidate
-                    onSubmit={(event) => handleAddBorrowerInterest(event, borrower)}
+                    onSubmit={(event) => handleBorrowerTransaction(event, borrower)}
                   >
                     <label>
-                      Interest date
+                      Add principal (available {formatCurrency(availableFundsCents / 100)})
+                      <input
+                        type="number"
+                        min="0.01"
+                        max={availableFundsCents / 100 + (Number(principalPaymentAmount) || 0)}
+                        step="any"
+                        value={principalAdditionAmount}
+                        onChange={(event) => {
+                          setPrincipalAdditionAmount(event.target.value)
+                          setBorrowerTransactionError('')
+                        }}
+                        placeholder="Leave blank to skip"
+                        disabled={availableFundsCents <= 0 && !principalPaymentAmount}
+                      />
+                    </label>
+                    <label>
+                      Pay principal (up to {formatBorrowerCurrency(borrower.loanAmount + (Number(principalAdditionAmount) || 0))})
+                      <input
+                        type="number"
+                        min="0.01"
+                        max={borrower.loanAmount + (Number(principalAdditionAmount) || 0)}
+                        step="any"
+                        value={principalPaymentAmount}
+                        onChange={(event) => {
+                          setPrincipalPaymentAmount(event.target.value)
+                          setBorrowerTransactionError('')
+                        }}
+                        placeholder="Leave blank to skip"
+                        disabled={!borrower.loanAmount && !principalAdditionAmount}
+                      />
+                    </label>
+                    <label>
+                      Add interest (at {borrower.interestRate}%)
+                      <span className="borrower-interest-accrual">
+                        <input
+                          type="checkbox"
+                          aria-label="Add interest"
+                          checked={interestAdditionSelected}
+                          onChange={(event) => {
+                            setInterestAdditionSelected(event.target.checked)
+                            setBorrowerTransactionError('')
+                          }}
+                          disabled={!hasOutstandingBorrowerBalance(borrower.loanAmount + (Number(principalAdditionAmount) || 0))}
+                        />
+                        <input
+                          type="text"
+                          aria-label="Interest to add"
+                          readOnly
+                          value={formatBorrowerCurrency(getInterestAdditionPreview(borrower))}
+                        />
+                      </span>
+                    </label>
+                    <label>
+                      Pay interest (up to {formatBorrowerCurrency(
+                        borrower.paydayInterest + (interestAdditionSelected ? getInterestAdditionPreview(borrower) : 0),
+                      )})
+                      <input
+                        type="number"
+                        min="0.01"
+                        max={borrower.paydayInterest + (interestAdditionSelected ? getInterestAdditionPreview(borrower) : 0)}
+                        step="any"
+                        value={interestPaymentAmount}
+                        onChange={(event) => {
+                          setInterestPaymentAmount(event.target.value)
+                          setBorrowerTransactionError('')
+                        }}
+                        placeholder="Leave blank to skip"
+                        disabled={!borrower.paydayInterest && !interestAdditionSelected}
+                      />
+                    </label>
+                    <label>
+                      Transaction date
                       <input
                         type="date"
                         required
-                        value={interestAdditionDate}
+                        value={borrowerTransactionDate}
                         onChange={(event) => {
-                          setInterestAdditionDate(event.target.value)
-                          setInterestAdditionError('')
+                          setBorrowerTransactionDate(event.target.value)
+                          setBorrowerTransactionError('')
                         }}
                       />
                     </label>
-                    <button type="submit" className="primary-button">Add interest</button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        setAddingInterestBorrowerId(null)
-                        setInterestAdditionError('')
-                      }}
-                    >
+                    <button type="submit" className="primary-button">Record transactions</button>
+                    <button type="button" className="secondary-button" onClick={closeBorrowerTransaction}>
                       Cancel
                     </button>
-                    {interestAdditionError && <p className="member-error" role="alert">{interestAdditionError}</p>}
+                    {borrowerTransactionError && <p className="member-error" role="alert">{borrowerTransactionError}</p>}
                   </form>
                 )}
                 <div className="borrower-metrics">
@@ -2612,102 +2657,6 @@ function LoansPage({
                         </tbody>
                       </table>
                 </div>
-                {payingBorrowerId === borrower.id && (
-                  <form
-                    className="interest-payment-form"
-                    noValidate
-                    onSubmit={(event) => handlePayBorrowerInterest(event, borrower)}
-                  >
-                    <label>
-                      Date received
-                      <input
-                        type="date"
-                        required
-                        value={interestPaymentDate}
-                        onChange={(event) => {
-                          setInterestPaymentDate(event.target.value)
-                          setInterestPaymentError('')
-                        }}
-                      />
-                    </label>
-                    <label>
-                      Payment amount (up to {formatBorrowerCurrency(borrower.paydayInterest)})
-                      <input
-                        type="number"
-                        min="0.01"
-                        max={borrower.paydayInterest}
-                        step="any"
-                        required
-                        value={interestPaymentAmount}
-                        onChange={(event) => {
-                          setInterestPaymentAmount(event.target.value)
-                          setInterestPaymentError('')
-                        }}
-                        placeholder="0"
-                      />
-                    </label>
-                    <button type="submit" className="primary-button">Record payment</button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        setPayingBorrowerId(null)
-                        setInterestPaymentError('')
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    {interestPaymentError && <p className="member-error" role="alert">{interestPaymentError}</p>}
-                  </form>
-                )}
-                {isAdmin && payingPrincipalBorrowerId === borrower.id && (
-                  <form
-                    className="interest-payment-form"
-                    noValidate
-                    onSubmit={(event) => handlePayBorrowerPrincipal(event, borrower)}
-                  >
-                    <label>
-                      Date received
-                      <input
-                        type="date"
-                        required
-                        value={principalPaymentDate}
-                        onChange={(event) => {
-                          setPrincipalPaymentDate(event.target.value)
-                          setPrincipalPaymentError('')
-                        }}
-                      />
-                    </label>
-                    <label>
-                      Payment amount (up to {formatBorrowerCurrency(borrower.loanAmount)})
-                      <input
-                        type="number"
-                        min="0.01"
-                        max={borrower.loanAmount}
-                        step="any"
-                        required
-                        value={principalPaymentAmount}
-                        onChange={(event) => {
-                          setPrincipalPaymentAmount(event.target.value)
-                          setPrincipalPaymentError('')
-                        }}
-                        placeholder="0"
-                      />
-                    </label>
-                    <button type="submit" className="primary-button">Record payment</button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        setPayingPrincipalBorrowerId(null)
-                        setPrincipalPaymentError('')
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    {principalPaymentError && <p className="member-error" role="alert">{principalPaymentError}</p>}
-                  </form>
-                )}
                 {isAdmin && editingPrincipalBorrowerId === borrower.id && (
                   <form
                     className="interest-payment-form"
@@ -2757,58 +2706,39 @@ function LoansPage({
                     {principalEditError && <p className="member-error" role="alert">{principalEditError}</p>}
                   </form>
                 )}
-                {isAdmin && addingPrincipalBorrowerId === borrower.id && (
-                  <form
-                    className="interest-payment-form"
-                    noValidate
-                    onSubmit={(event) => handleAddBorrowerPrincipal(event, borrower)}
-                  >
-                    <label>
-                      Date added
-                      <input
-                        type="date"
-                        required
-                        value={principalAdditionDate}
-                        onChange={(event) => {
-                          setPrincipalAdditionDate(event.target.value)
-                          setPrincipalAdditionError('')
-                        }}
-                      />
-                    </label>
-                    <label>
-                      Amount to add
-                      <input
-                        type="number"
-                        min="0.01"
-                        max={availableFundsCents / 100}
-                        step="any"
-                        required
-                        value={principalAdditionAmount}
-                        onChange={(event) => {
-                          setPrincipalAdditionAmount(event.target.value)
-                          setPrincipalAdditionError('')
-                        }}
-                        placeholder="0"
-                      />
-                      <small>Available funds: {formatCurrency(availableFundsCents / 100)}</small>
-                    </label>
-                    <button type="submit" className="primary-button" disabled={availableFundsCents <= 0}>Add principal</button>
-                    {availableFundsCents <= 0 && (
-                      <p className="member-error" role="alert">No available funds to add to this loan.</p>
-                    )}
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => {
-                        setAddingPrincipalBorrowerId(null)
-                        setPrincipalAdditionError('')
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    {principalAdditionError && <p className="member-error" role="alert">{principalAdditionError}</p>}
-                  </form>
-                )}
+                <div className="loan-transactions">
+                  <small>Loan transactions</small>
+                  {borrower.transactions && borrower.transactions.length > 0 ? (
+                    <ul className="loan-transaction-list">
+                      {borrower.transactions.map((transaction) => (
+                        <li key={transaction.id} className="loan-transaction-item">
+                          <span className={`transaction-type ${transaction.type}`}>
+                            {transaction.type === 'interest-payment'
+                              ? 'Interest paid'
+                              : transaction.type === 'principal-payment'
+                                ? 'Principal paid'
+                                : transaction.type === 'principal-addition'
+                                  ? 'Principal added'
+                                  : transaction.type === 'principal-adjustment'
+                                    ? 'Principal edited'
+                                  : transaction.type === 'interest' ? 'Interest' : 'Loan'}
+                          </span>
+                          <strong>
+                              {transaction.type === 'principal-adjustment' && transaction.previousAmount !== undefined && transaction.newAmount !== undefined
+                                ? `${formatBorrowerCurrency(transaction.previousAmount)} → ${formatBorrowerCurrency(transaction.newAmount)}`
+                                : `${transaction.type === 'interest-payment' || transaction.type === 'principal-payment' ? '-' : ''}${formatBorrowerCurrency(transaction.amount)}`}
+                          </strong>
+                          <time className="loan-transaction-date">{formatDate(transaction.date)}</time>
+                          {transaction.type === 'principal-adjustment' && transaction.reason && (
+                              <small className="loan-transaction-reason">Reason: {transaction.reason}</small>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="loan-transactions-empty">No loan transactions yet.</p>
+                  )}
+                </div>
               </li>
             ))}
                   </ul>
@@ -2935,6 +2865,7 @@ function ProfitsPage({
   totalGroupAllowance,
   isAdmin,
   onAddOtherProfit,
+  onEditGroupAllowance,
   onApplyMemberProfitAction,
   onSendToEncoder,
   onTransferProfit,
@@ -2950,6 +2881,7 @@ function ProfitsPage({
   totalGroupAllowance: number
   isAdmin: boolean
   onAddOtherProfit: (profit: OtherProfit) => void
+  onEditGroupAllowance: (amount: number, reason: string) => void
   onApplyMemberProfitAction: (memberName: string, amount: number, action: 'add to savings' | 'get profit' | 'penalty', memberProfit: number) => void
   onSendToEncoder: (encoderName: string, payments: Array<{ memberName: string; amount: number }>) => void
   onTransferProfit: (dateFrom: string, dateTo: string) => void
@@ -2973,6 +2905,10 @@ function ProfitsPage({
   const [otherProfitSource, setOtherProfitSource] = useState('')
   const [otherProfitDate, setOtherProfitDate] = useState(getLocalDate)
   const [otherProfitError, setOtherProfitError] = useState('')
+  const [isEditingGroupAllowance, setIsEditingGroupAllowance] = useState(false)
+  const [editedGroupAllowance, setEditedGroupAllowance] = useState('')
+  const [groupAllowanceReason, setGroupAllowanceReason] = useState('')
+  const [groupAllowanceError, setGroupAllowanceError] = useState('')
   const [isMemberPayoutHistoryExpanded, setIsMemberPayoutHistoryExpanded] = useState(true)
   const [groupEncoderNames] = useState(() => [...new Set(
     loadGroupUpdateData().data.groupEncoders.map((encoder) => encoder.name.trim()).filter(Boolean),
@@ -3087,6 +3023,25 @@ function ProfitsPage({
     setOtherProfitDate(getLocalDate())
     setOtherProfitError('')
   }
+  const handleEditGroupAllowance = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const amount = Number(editedGroupAllowance)
+    const amountCents = Math.round(amount * 100)
+    if (editedGroupAllowance.trim() === '' || !Number.isFinite(amount)
+      || amount < 0 || !Number.isSafeInteger(amountCents)) {
+      setGroupAllowanceError('Enter a valid allowance amount of zero or greater.')
+      return
+    }
+    if (!groupAllowanceReason.trim()) {
+      setGroupAllowanceError('Enter a reason for editing the group allowance.')
+      return
+    }
+    onEditGroupAllowance(amountCents / 100, groupAllowanceReason.trim())
+    setIsEditingGroupAllowance(false)
+    setEditedGroupAllowance('')
+    setGroupAllowanceReason('')
+    setGroupAllowanceError('')
+  }
   const selectedInterestTotal = filteredProfitSources
     .filter((payment) => !payment.id.startsWith('other-profit-'))
     .reduce((total, payment) => total + payment.amount, 0)
@@ -3117,7 +3072,8 @@ function ProfitsPage({
     cashout.transferTotal === distributedProfitTotal
     && cashout.action !== 'encoder'
     && cashout.action !== 'penalty'
-    && cashout.action !== 'allocation',
+    && cashout.action !== 'allocation'
+    && cashout.action !== 'allowance adjustment',
   )
   const canSendToEncoder = isAdmin
     && groupEncoderNames.length > 0
@@ -3273,6 +3229,67 @@ function ProfitsPage({
                   </div>
                 )}
               </div>
+            ) : item.label === 'Group allowance' ? (
+              <>
+                <p>{item.label}</p>
+                <h2>{item.value}</h2>
+                {isAdmin && (
+                  isEditingGroupAllowance ? (
+                    <form className="profit-transfer-form" noValidate onSubmit={handleEditGroupAllowance}>
+                      <label>
+                        New allowance total (PHP)
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editedGroupAllowance}
+                          onChange={(event) => {
+                            setEditedGroupAllowance(event.target.value)
+                            setGroupAllowanceError('')
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Reason
+                        <input
+                          value={groupAllowanceReason}
+                          onChange={(event) => {
+                            setGroupAllowanceReason(event.target.value)
+                            setGroupAllowanceError('')
+                          }}
+                        />
+                      </label>
+                      <div className="profit-transfer-actions">
+                        <button type="submit" className="primary-button">Save allowance</button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            setIsEditingGroupAllowance(false)
+                            setEditedGroupAllowance('')
+                            setGroupAllowanceReason('')
+                            setGroupAllowanceError('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      {groupAllowanceError && <p className="member-error" role="alert">{groupAllowanceError}</p>}
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setEditedGroupAllowance(totalGroupAllowance.toFixed(2))
+                        setIsEditingGroupAllowance(true)
+                      }}
+                    >
+                      Edit allowance
+                    </button>
+                  )
+                )}
+              </>
             ) : (
               <>
                 <p>{item.label}</p>
@@ -3593,7 +3610,9 @@ function ProfitsPage({
             <ul className="profit-interest-list">
               {[...profitCashouts].sort((first, second) => second.date.localeCompare(first.date)).map((cashout, index) => (
                 <li key={`${cashout.memberName}-${cashout.date}-${index}`}>
-                  <span>{cashout.memberName} · {cashout.action === 'added to savings'
+                  <span>{cashout.action === 'allowance adjustment'
+                    ? 'Group allowance edited'
+                    : `${cashout.memberName} · ${cashout.action === 'added to savings'
                     ? 'Added to savings'
                     : cashout.action === 'allocation'
                       ? 'Profit allocated'
@@ -3601,11 +3620,17 @@ function ProfitsPage({
                       ? 'Penalty to group allowance'
                       : cashout.action === 'encoder'
                         ? `Sent to encoder${cashout.encoderName ? ` ${cashout.encoderName}` : ''}`
-                        : 'Cashout'}</span>
-                  <strong className={cashout.action === 'added to savings' || cashout.action === 'allocation' ? 'positive' : 'negative'}>
-                    {cashout.action === 'added to savings' || cashout.action === 'allocation' ? '+' : '-'}{formatCurrency(cashout.amount)}
+                        : 'Cashout'}`}</span>
+                  <strong className={cashout.action === 'added to savings' || cashout.action === 'allocation'
+                    || (cashout.action === 'allowance adjustment' && cashout.amount >= 0) ? 'positive' : 'negative'}>
+                    {cashout.action === 'allowance adjustment'
+                      ? `${formatCurrency(cashout.previousAmount ?? 0)} → ${formatCurrency(cashout.newAmount ?? 0)}`
+                      : `${cashout.action === 'added to savings' || cashout.action === 'allocation' ? '+' : '-'}${formatCurrency(cashout.amount)}`}
                   </strong>
                   <time dateTime={cashout.date}>{formatDate(cashout.date)}</time>
+                  {cashout.action === 'allowance adjustment' && cashout.reason && (
+                    <small className="profit-transaction-reason">Reason: {cashout.reason}</small>
+                  )}
                 </li>
               ))}
             </ul>
@@ -4564,10 +4589,15 @@ function App() {
   const totalOtherProfit = otherProfits.reduce((total, profit) => total + profit.amount, 0)
   const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, currentYear)
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
-  const totalGroupAllowance = members.reduce((total, member) => total + member.withdrawals.reduce(
-    (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
-    0,
-  ), 0)
+  const totalGroupAllowance = Number((
+    members.reduce((total, member) => total + member.withdrawals.reduce(
+      (memberTotal, withdrawal) => memberTotal + (withdrawal.reason === 'Profit penalty' ? withdrawal.amount : withdrawal.amount * 0.1),
+      0,
+    ), 0)
+    + [...profitCashouts, ...deletedProfitTransactions]
+      .filter((transaction) => transaction.action === 'allowance adjustment')
+      .reduce((total, transaction) => total + transaction.amount, 0)
+  ).toFixed(2))
   const cashOutTransactions = getOverviewCashOutTransactions(members, borrowers, profitCashouts)
   const cashInTransactions = getOverviewCashInTransactions(members, borrowers, removedBorrowerTransactions, otherProfits)
   const registeredGuarantors = accounts
@@ -4582,7 +4612,7 @@ function App() {
 
   useEffect(() => {
     if (!isIntroVisible) return
-    const introTimeout = window.setTimeout(() => setIsIntroVisible(false), 1800)
+    const introTimeout = window.setTimeout(() => setIsIntroVisible(false), 2200)
     return () => window.clearTimeout(introTimeout)
   }, [isIntroVisible])
 
@@ -5123,6 +5153,24 @@ function App() {
     }])
   }
 
+  const editGroupAllowance = (amount: number, reason: string) => {
+    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount < 0
+      || !Number.isSafeInteger(Math.round(amount * 100)) || !reason.trim()) return
+    const newAmount = Number(amount.toFixed(2))
+    const previousAmount = Number(totalGroupAllowance.toFixed(2))
+    if (newAmount === previousAmount) return
+    rememberTransactionUndo('group allowance adjustment')
+    setProfitCashouts((currentCashouts) => [...currentCashouts, {
+      memberName: 'Group allowance',
+      amount: Number((newAmount - previousAmount).toFixed(2)),
+      date: getLocalDate(),
+      action: 'allowance adjustment',
+      previousAmount,
+      newAmount,
+      reason: reason.trim(),
+    }])
+  }
+
   const sendProfitToEncoder = (
     encoderName: string,
     payments: Array<{ memberName: string; amount: number }>,
@@ -5134,6 +5182,7 @@ function App() {
     if (profitCashouts.some((cashout) =>
       cashout.transferTotal === transferTotal
       && cashout.action !== 'penalty'
+      && cashout.action !== 'allowance adjustment'
       && cashout.action !== 'allocation')) return
     const date = getLocalDate()
     const payouts = payments.map(({ memberName, amount }) => ({
@@ -5477,93 +5526,77 @@ function App() {
     ))
   }
 
-  const addBorrowerInterest = (borrowerId: string, date: string) => {
+  const transactBorrower = (borrowerId: string, transaction: BorrowerTransactionInput) => {
     if (signedInRole !== 'admin') return
     const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
-    if (!borrower || borrower.loanAmount <= 0) return
-    rememberTransactionUndo('interest accrued')
-    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
-      if (borrower.id !== borrowerId) return borrower
-      const accruedInterest = Number((borrower.loanAmount * borrower.interestRate / 100).toFixed(2))
-      const nextPaydayInterest = Number((borrower.paydayInterest + accruedInterest).toFixed(2))
-      const nextTransaction = {
-        id: crypto.randomUUID(),
-        type: 'interest' as const,
-        amount: accruedInterest,
-        date,
-      }
-      return {
-        ...borrower,
-        paydayInterest: nextPaydayInterest,
-        transactions: [...(borrower.transactions ?? []), nextTransaction],
-      }
-    }))
-  }
+    if (!borrower) return
 
-  const payBorrowerInterest = (borrowerId: string, amount: number, date: string) => {
-    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
-    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
-    if (!borrower || amount > borrower.paydayInterest) return
-    rememberTransactionUndo('interest payment')
-    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
-      if (borrower.id !== borrowerId || amount > borrower.paydayInterest) return borrower
-      const remainingInterest = Number((borrower.paydayInterest - amount).toFixed(2))
-      const nextTransaction = {
-        id: crypto.randomUUID(),
-        type: 'interest-payment' as const,
-        amount,
-        date,
-      }
-      return {
-        ...borrower,
-        paydayInterest: Math.max(0, remainingInterest),
-        transactions: [...(borrower.transactions ?? []), nextTransaction],
-      }
-    }))
-  }
+    const principalAddition = transaction.principalAddition ?? 0
+    const principalPayment = transaction.principalPayment ?? 0
+    const interestPayment = transaction.interestPayment ?? 0
+    const amounts = [principalAddition, principalPayment, interestPayment]
+    if (amounts.some((amount) => !Number.isFinite(amount) || amount < 0)
+      || !transaction.date
+      || (principalAddition === 0 && principalPayment === 0 && !transaction.addInterest && interestPayment === 0)) return
 
-  const payBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
-    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0 || !date) return
-    const borrower = borrowers.find((candidate) => candidate.id === borrowerId)
-    if (!borrower || hasOutstandingBorrowerBalance(borrower.paydayInterest) || amount > borrower.loanAmount) return
-    rememberTransactionUndo('principal payment')
-    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
-      if (borrower.id !== borrowerId
-        || hasOutstandingBorrowerBalance(borrower.paydayInterest)
-        || amount > borrower.loanAmount) return borrower
-      const remainingPrincipal = Number((borrower.loanAmount - amount).toFixed(2))
-      const nextTransaction = {
-        id: crypto.randomUUID(),
-        type: 'principal-payment' as const,
-        amount,
-        date,
-      }
-      return {
-        ...borrower,
-        loanAmount: Math.max(0, remainingPrincipal),
-        transactions: [...(borrower.transactions ?? []), nextTransaction],
-      }
-    }))
-  }
+    const principalAdditionCents = Math.round(principalAddition * 100)
+    const principalPaymentCents = Math.round(principalPayment * 100)
+    const availableFundsCents = Math.max(0, Math.round(availableFunds * 100))
+    if (principalAdditionCents > availableFundsCents + principalPaymentCents
+      || principalPayment > borrower.loanAmount + principalAddition) return
 
-  const addBorrowerPrincipal = (borrowerId: string, amount: number, date: string) => {
-    if (signedInRole !== 'admin' || !Number.isFinite(amount) || amount <= 0) return
-    if (!borrowers.some((borrower) => borrower.id === borrowerId)) return
-    rememberTransactionUndo('principal addition')
-    setBorrowers((currentBorrowers) => currentBorrowers.map((borrower) => {
-      if (borrower.id !== borrowerId) return borrower
-      const updatedLoanAmount = Number((borrower.loanAmount + amount).toFixed(2))
-      if (!Number.isFinite(updatedLoanAmount)) return borrower
-      const nextTransaction = {
-        id: crypto.randomUUID(),
-        type: 'principal-addition' as const,
-        amount,
-        date,
+    const principalBeforePayment = Number((borrower.loanAmount + principalAddition).toFixed(2))
+    const interestAddition = transaction.addInterest
+      ? Number((principalBeforePayment * borrower.interestRate / 100).toFixed(2))
+      : 0
+    const interestBeforePayment = Number((borrower.paydayInterest + interestAddition).toFixed(2))
+    if ((transaction.addInterest && !hasOutstandingBorrowerBalance(principalBeforePayment))
+      || interestPayment > interestBeforePayment
+      || (principalPayment > 0
+        && hasOutstandingBorrowerBalance(Number((interestBeforePayment - interestPayment).toFixed(2))))) return
+
+    rememberTransactionUndo('borrower transactions')
+    setBorrowers((currentBorrowers) => currentBorrowers.map((currentBorrower) => {
+      if (currentBorrower.id !== borrowerId) return currentBorrower
+      const transactions = [...(currentBorrower.transactions ?? [])]
+      if (principalAddition > 0) {
+        transactions.push({
+          id: crypto.randomUUID(),
+          type: 'principal-addition' as const,
+          amount: principalAddition,
+          date: transaction.date,
+        })
       }
+      if (transaction.addInterest) {
+        transactions.push({
+          id: crypto.randomUUID(),
+          type: 'interest' as const,
+          amount: interestAddition,
+          date: transaction.date,
+        })
+      }
+      if (interestPayment > 0) {
+        transactions.push({
+          id: crypto.randomUUID(),
+          type: 'interest-payment' as const,
+          amount: interestPayment,
+          date: transaction.date,
+        })
+      }
+      if (principalPayment > 0) {
+        transactions.push({
+          id: crypto.randomUUID(),
+          type: 'principal-payment' as const,
+          amount: principalPayment,
+          date: transaction.date,
+        })
+      }
+
       return {
-        ...borrower,
-        loanAmount: updatedLoanAmount,
-        transactions: [...(borrower.transactions ?? []), nextTransaction],
+        ...currentBorrower,
+        loanAmount: Number((currentBorrower.loanAmount + principalAddition - principalPayment).toFixed(2)),
+        paydayInterest: Math.max(0, Number((currentBorrower.paydayInterest + interestAddition - interestPayment).toFixed(2))),
+        transactions,
       }
     }))
   }
@@ -5846,10 +5879,7 @@ function App() {
             availableFunds={availableFunds}
             isAdmin={false}
             onAddBorrower={addBorrower}
-            onAddBorrowerInterest={addBorrowerInterest}
-            onPayBorrowerInterest={payBorrowerInterest}
-            onPayBorrowerPrincipal={payBorrowerPrincipal}
-            onAddBorrowerPrincipal={addBorrowerPrincipal}
+            onTransactBorrower={transactBorrower}
             onEditBorrowerPrincipal={editBorrowerPrincipal}
             onRemoveBorrower={removeBorrower}
             onClearLoans={clearLoanRecords}
@@ -5906,10 +5936,7 @@ function App() {
             availableFunds={availableFunds}
             isAdmin={signedInRole === 'admin'}
             onAddBorrower={addBorrower}
-            onAddBorrowerInterest={addBorrowerInterest}
-            onPayBorrowerInterest={payBorrowerInterest}
-            onPayBorrowerPrincipal={payBorrowerPrincipal}
-            onAddBorrowerPrincipal={addBorrowerPrincipal}
+            onTransactBorrower={transactBorrower}
             onEditBorrowerPrincipal={editBorrowerPrincipal}
             onRemoveBorrower={removeBorrower}
             onClearLoans={clearLoanRecords}
@@ -5928,6 +5955,7 @@ function App() {
           totalGroupAllowance={totalGroupAllowance}
           isAdmin={signedInRole === 'admin'}
           onAddOtherProfit={addOtherProfit}
+          onEditGroupAllowance={editGroupAllowance}
           onApplyMemberProfitAction={applyMemberProfitAction}
           onSendToEncoder={sendProfitToEncoder}
           onTransferProfit={transferProfit}

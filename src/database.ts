@@ -81,9 +81,12 @@ export type ProfitCashout = {
   memberName: string
   amount: number
   date: string
-  action?: 'cashout' | 'added to savings' | 'penalty' | 'encoder' | 'allocation'
+  action?: 'cashout' | 'added to savings' | 'penalty' | 'encoder' | 'allocation' | 'allowance adjustment'
   transferTotal?: number
   encoderName?: string
+  previousAmount?: number
+  newAmount?: number
+  reason?: string
 }
 export type AppUndoTransaction = {
   id: string
@@ -718,6 +721,7 @@ export const readWorkbookData = async (
       || actionValue === 'penalty'
       || actionValue === 'encoder'
       || actionValue === 'allocation'
+      || actionValue === 'allowance adjustment'
       ? actionValue
       : 'cashout'
     const transferTotalCell = row.getCell(5).value
@@ -728,8 +732,24 @@ export const readWorkbookData = async (
       ? transferTotalValue
       : undefined
     const encoderName = String(row.getCell(6).value ?? '').trim() || undefined
-    if (memberName && Number.isFinite(amount) && amount > 0 && date) {
-      profitCashouts.push({ memberName, amount, date, action, transferTotal, encoderName })
+    const previousAmount = Number(row.getCell(7).value)
+    const newAmount = Number(row.getCell(8).value)
+    const reason = String(row.getCell(9).value ?? '').trim() || undefined
+    const isAllowanceAdjustment = action === 'allowance adjustment'
+    if (memberName && Number.isFinite(amount) && (isAllowanceAdjustment
+      ? amount !== 0 && Number.isFinite(previousAmount) && Number.isFinite(newAmount)
+        && previousAmount >= 0 && newAmount >= 0
+        && Number((newAmount - previousAmount).toFixed(2)) === Number(amount.toFixed(2)) && Boolean(reason)
+      : amount > 0) && date) {
+      profitCashouts.push({
+        memberName,
+        amount,
+        date,
+        action,
+        transferTotal,
+        encoderName,
+        ...(isAllowanceAdjustment ? { previousAmount, newAmount, reason } : {}),
+      })
     }
   })
 
@@ -771,14 +791,32 @@ export const readWorkbookData = async (
       || actionValue === 'penalty'
       || actionValue === 'encoder'
       || actionValue === 'allocation'
+      || actionValue === 'allowance adjustment'
       ? actionValue
       : 'cashout'
     const transferTotalValue = Number(row.getCell(5).value)
     const transferTotal = Number.isFinite(transferTotalValue) && transferTotalValue >= 0 ? transferTotalValue : undefined
     const deletedAt = getCellDate(row.getCell(6).value)
     const encoderName = String(row.getCell(7).value ?? '').trim() || undefined
-    if (memberName && Number.isFinite(amount) && amount > 0 && date && deletedAt) {
-      deletedProfitTransactions.push({ memberName, amount, date, action, transferTotal, encoderName, deletedAt })
+    const previousAmount = Number(row.getCell(8).value)
+    const newAmount = Number(row.getCell(9).value)
+    const reason = String(row.getCell(10).value ?? '').trim() || undefined
+    const isAllowanceAdjustment = action === 'allowance adjustment'
+    if (memberName && Number.isFinite(amount) && (isAllowanceAdjustment
+      ? amount !== 0 && Number.isFinite(previousAmount) && Number.isFinite(newAmount)
+        && previousAmount >= 0 && newAmount >= 0
+        && Number((newAmount - previousAmount).toFixed(2)) === Number(amount.toFixed(2)) && Boolean(reason)
+      : amount > 0) && date && deletedAt) {
+      deletedProfitTransactions.push({
+        memberName,
+        amount,
+        date,
+        action,
+        transferTotal,
+        encoderName,
+        ...(isAllowanceAdjustment ? { previousAmount, newAmount, reason } : {}),
+        deletedAt,
+      })
     }
   })
 
@@ -1018,7 +1056,17 @@ export const writeWorkbookData = async (
   ]))
 
   const profitCashoutsSheet = workbook.addWorksheet('Profit Cashouts')
-  profitCashoutsSheet.addRow(['Member', 'Amount (PHP)', 'Date', 'Action', 'Transfer Total (PHP)', 'Encoder'])
+  profitCashoutsSheet.addRow([
+    'Member',
+    'Amount (PHP)',
+    'Date',
+    'Action',
+    'Transfer Total (PHP)',
+    'Encoder',
+    'Previous Amount (PHP)',
+    'New Amount (PHP)',
+    'Reason',
+  ])
   profitCashouts.forEach((cashout) => profitCashoutsSheet.addRow([
     cashout.memberName,
     cashout.amount,
@@ -1026,6 +1074,9 @@ export const writeWorkbookData = async (
     cashout.action ?? 'cashout',
     cashout.transferTotal ?? '',
     cashout.encoderName ?? '',
+    cashout.previousAmount ?? '',
+    cashout.newAmount ?? '',
+    cashout.reason ?? '',
   ]))
 
   const deletedSavingsSheet = workbook.addWorksheet('Deleted Savings Transactions')
@@ -1072,6 +1123,9 @@ export const writeWorkbookData = async (
       { name: 'Transfer Total (PHP)' },
       { name: 'Deleted At' },
       { name: 'Encoder' },
+      { name: 'Previous Amount (PHP)' },
+      { name: 'New Amount (PHP)' },
+      { name: 'Reason' },
     ],
     rows: deletedProfitTransactions.map((transaction) => [
       transaction.memberName,
@@ -1081,6 +1135,9 @@ export const writeWorkbookData = async (
       transaction.transferTotal ?? '',
       transaction.deletedAt,
       transaction.encoderName ?? '',
+      transaction.previousAmount ?? '',
+      transaction.newAmount ?? '',
+      transaction.reason ?? '',
     ]),
   })
 
