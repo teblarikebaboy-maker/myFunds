@@ -1,0 +1,214 @@
+With your background in maintenance, automation, and ESP32 projects, you can learn PLCs much faster than someone starting from zero.
+
+Most Common PLC Brands in Australia
+
+For industrial maintenance and automation jobs in Australia, these are the PLC brands you'll see most often:
+
+1. Siemens ⭐
+
+Very common in:
+
+Manufacturing
+Food processing
+Mining
+Water treatment
+
+Software:
+
+TIA Portal
+STEP 7
+
+PLC Families:
+
+S7-1200
+S7-1500
+
+If I had to pick one PLC platform to learn for Australia, it would be Siemens S7-1200/S7-1500.
+
+2. Allen-Bradley (Rockwell Automation) ⭐
+
+Extremely common in:
+
+Mining
+Heavy industry
+Packaging
+Manufacturing
+
+Software:
+
+Studio 5000
+RSLogix 5000
+
+PLC Families:
+
+CompactLogix
+ControlLogix
+MicroLogix
+
+Mining companies especially value Allen-Bradley experience.
+
+3. Schneider Electric
+
+Common in:
+
+Building automation
+Utilities
+Infrastructure
+
+Software:
+
+EcoStruxure Machine Expert
+4. Omron
+
+Common in:
+
+Machine builders
+Packaging
+Assembly lines
+
+Software:
+
+CX-Programmer
+Sysmac Studio
+5. Mitsubishi
+
+Found in many Asian-owned factories in Australia.
+
+Software:
+
+GX Works2
+GX Works3
+What Should You Learn First?
+
+For employability:
+
+Siemens S7-1200
+Allen-Bradley CompactLogix
+HMI integration
+VFD integration
+Industrial networking
+How to Practice PLCs for Free
+Option 1: PLC Simulator Software
+
+Start immediately with:
+
+PLC Fiddle
+Browser-based.
+Free ladder logic simulator.
+No installation.
+
+Good for:
+
+Timers
+Counters
+Interlocks
+Motor control logic
+Factory I/O
+3D factory simulation.
+Widely used for learning.
+Works with multiple PLC platforms.
+
+You can simulate:
+
+Conveyors
+Sensors
+Packaging machines
+Traffic systems
+
+This is one of the best tools available.
+
+Option 2: Siemens TIA Portal Simulation
+
+Install:
+
+TIA Portal
+PLCSIM
+
+You can create:
+
+Start/Stop circuits
+Conveyor systems
+Sorting machines
+Alarm systems
+
+without owning a PLC.
+
+Option 3: Use an ESP32 as the Physical Process
+
+You already work with ESP32.
+
+Build:
+
+Pushbuttons
+Relays
+LEDs
+Sensors
+
+Then have the PLC simulator control the process logic.
+
+This teaches:
+
+Inputs
+Outputs
+Sequencing
+State machines
+
+which is exactly what you'll do in industry.
+
+What Projects Should You Build?
+Beginner
+
+Motor starter
+
+Requirements:
+
+Start button
+Stop button
+Seal-in circuit
+Overload fault
+Intermediate
+
+Conveyor system
+
+Requirements:
+
+Start conveyor
+Detect product
+Count products
+Stop at target quantity
+Advanced
+
+Factory Monitoring Dashboard
+
+Since you're learning web development:
+
+PLC → MQTT → Node.js → PostgreSQL → React Dashboard
+
+Features:
+
+Production counts
+Alarm history
+Downtime tracking
+OEE calculation
+
+This combination of PLC + Web Development is very attractive because many factories are moving toward Industry 4.0 solutions.
+
+My Recommendation for You
+
+Since you already have:
+
+Electronics Engineering background
+10+ years maintenance experience
+ESP32 projects
+Web development skills
+
+I would spend the next 3-6 months focusing on:
+
+Siemens S7-1200
+TIA Portal
+Factory I/O
+Industrial Ethernet (Profinet)
+Basic HMI development
+SCADA concepts
+
+That path aligns well with Australian maintenance, automation, and controls technician roles, and it complements your existing experience much better than trying to compete purely as a general web developer.
