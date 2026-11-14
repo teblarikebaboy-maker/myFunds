@@ -460,11 +460,10 @@ const formatCurrency = (amount: number) =>
 const formatSavingsSummaryAmount = (amountCents: number) =>
   new Intl.NumberFormat('en-PH', { maximumFractionDigits: 2 }).format(amountCents / 100)
 
-const savingsSummaryYear = 2026
-const getSavingsScheduleDates = () => {
-  const dates = ['2025-12-30']
+const getSavingsScheduleDates = (year: number) => {
+  const dates = [`${year - 1}-12-30`]
   for (let month = 0; month < 12; month += 1) {
-    const monthPrefix = `${savingsSummaryYear}-${String(month + 1).padStart(2, '0')}`
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`
     dates.push(`${monthPrefix}-15`)
     if (month < 11) dates.push(`${monthPrefix}-${month === 1 ? '28' : '30'}`)
   }
@@ -605,7 +604,8 @@ function OverviewPage({
   totalLoanProceeds,
   totalInterestPaid,
   totalOtherProfit,
-  monthlyNetProfit,
+  monthlyNetProfitByYear,
+  availableProfitYears,
   cashInTransactions,
   cashOutTransactions,
 }: {
@@ -613,10 +613,12 @@ function OverviewPage({
   totalLoanProceeds: number
   totalInterestPaid: number
   totalOtherProfit: number
-  monthlyNetProfit: Array<{ month: string; value: number }>
+  monthlyNetProfitByYear: Record<number, Array<{ month: string; value: number }>>
+  availableProfitYears: number[]
   cashInTransactions: OverviewCashInTransaction[]
   cashOutTransactions: OverviewCashOutTransaction[]
 }) {
+  const [selectedProfitYear, setSelectedProfitYear] = useState(currentYear)
   const [chartStyle, setChartStyle] = useState<ChartStyle>('bar')
   const [isChartStyleMenuOpen, setIsChartStyleMenuOpen] = useState(false)
   const [{ data: groupUpdateData, error: groupUpdateError }] = useState(loadGroupUpdateData)
@@ -627,6 +629,7 @@ function OverviewPage({
   const meetingMapUrl = groupUpdateData.meetingPlace.trim()
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(groupUpdateData.meetingPlace.trim())}`
     : ''
+  const monthlyNetProfit = monthlyNetProfitByYear[selectedProfitYear] ?? []
   const maxMonthlyProfit = Math.max(1, ...monthlyNetProfit.map((month) => month.value))
   const chartPoints = monthlyNetProfit.map((month, index) => ({
     x: 20 + (index / (monthlyNetProfit.length - 1)) * 1060,
@@ -666,7 +669,18 @@ function OverviewPage({
               <p className="eyebrow">NET PROFIT</p>
               <h3>Monthly Net Profit</h3>
             </div>
-            <button type="button" className="secondary-button">{currentYear}</button>
+            <label className="overview-profit-year-select">
+              <span>Year</span>
+              <select
+                aria-label="Select net profit year"
+                value={selectedProfitYear}
+                onChange={(event) => setSelectedProfitYear(Number(event.target.value))}
+              >
+                {availableProfitYears.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className={`chart chart-${chartStyle}`} aria-label="Monthly net profit trend">
@@ -1119,6 +1133,7 @@ function SavingsPage({
   onClearSavingsTransactions,
 }: SavingsPageProps) {
   const [memberSearch, setMemberSearch] = useState('')
+  const [selectedSavingsSummaryYear, setSelectedSavingsSummaryYear] = useState(() => new Date().getFullYear())
   const [collapsedSavingsSummaryHalves, setCollapsedSavingsSummaryHalves] = useState<Set<string>>(() => new Set())
   const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(false)
   const [expandedMemberSavingsTransactions, setExpandedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
@@ -1278,6 +1293,9 @@ function SavingsPage({
     .sort((first, second) => second.date.localeCompare(first.date))
   const savingsByDateAndMember = new Map<string, Map<string, number>>()
   const previousSavingsByDateAndMember = new Map<string, Map<string, number>>()
+  const availableSavingsYears = new Set<number>([selectedSavingsSummaryYear])
+  const savingsSummaryYear = selectedSavingsSummaryYear
+  const previousSavingsSummaryDate = `${savingsSummaryYear - 1}-12-30`
   members.forEach((member) => {
     const savingsEntries = [
       ...(member.initialSavings > 0
@@ -1296,7 +1314,8 @@ function SavingsPage({
 
     savingsEntries.forEach(({ amount, date }) => {
       if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return
-      if (date < `${savingsSummaryYear}-01-01` && date !== '2025-12-30') {
+      availableSavingsYears.add(Number(date.slice(0, 4)))
+      if (date < `${savingsSummaryYear}-01-01` && date !== previousSavingsSummaryDate) {
         const previousSavingsByMember = previousSavingsByDateAndMember.get(date) ?? new Map<string, number>()
         previousSavingsByMember.set(
           member.name,
@@ -1305,7 +1324,7 @@ function SavingsPage({
         previousSavingsByDateAndMember.set(date, previousSavingsByMember)
         return
       }
-      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== '2025-12-30') return
+      if (date.slice(0, 4) !== String(savingsSummaryYear) && date !== previousSavingsSummaryDate) return
       if (date === `${savingsSummaryYear}-12-30`) return
 
       const savingsByMember = savingsByDateAndMember.get(date) ?? new Map<string, number>()
@@ -1316,8 +1335,15 @@ function SavingsPage({
       savingsByDateAndMember.set(date, savingsByMember)
     })
   })
+  const savingsYearBounds = [...availableSavingsYears]
+  const firstSavingsYear = Math.min(...savingsYearBounds)
+  const lastSavingsYear = Math.max(...savingsYearBounds)
+  const savingsSummaryYears = Array.from(
+    { length: lastSavingsYear - firstSavingsYear + 1 },
+    (_, index) => lastSavingsYear - index,
+  )
   const savingsScheduleDates = [...new Set([
-    ...getSavingsScheduleDates(),
+    ...getSavingsScheduleDates(savingsSummaryYear),
     ...savingsByDateAndMember.keys(),
   ])].sort()
   const savingsScheduleRows = savingsScheduleDates.map((date) => ({
@@ -1420,11 +1446,22 @@ function SavingsPage({
       </section>
 
       <section className="panel full-width-panel">
-        <div className="panel-header">
+        <div className="panel-header savings-summary-header">
           <div>
             <p className="eyebrow">Savings Summary</p>
             <h3>Savings contribution schedule</h3>
           </div>
+          <label className="savings-summary-year-select">
+            Year
+            <select
+              value={savingsSummaryYear}
+              onChange={(event) => setSelectedSavingsSummaryYear(Number(event.target.value))}
+            >
+              {savingsSummaryYears.map((year) => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </label>
         </div>
         {members.length > 0 ? (
           <div className="monthly-savings-table-wrap">
@@ -3256,7 +3293,7 @@ function ProfitsPage({
                 <h2>{item.value}</h2>
                 {isAdmin && (
                   isEditingGroupAllowance ? (
-                    <form className="profit-transfer-form" noValidate onSubmit={handleEditGroupAllowance}>
+                    <form className="profit-transfer-form group-allowance-edit-form" noValidate onSubmit={handleEditGroupAllowance}>
                       <label>
                         New allowance total (PHP)
                         <input
@@ -4608,7 +4645,21 @@ function App() {
   const availableFunds = totalSavings - totalLoanProceeds
   const totalInterestPaid = getTotalInterestPaid(borrowers, removedBorrowerTransactions)
   const totalOtherProfit = otherProfits.reduce((total, profit) => total + profit.amount, 0)
-  const monthlyNetProfit = getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, currentYear)
+  const overviewProfitYears = [...new Set([
+    currentYear,
+    ...borrowers.flatMap((borrower) => (borrower.transactions ?? [])
+      .filter((transaction) => transaction.type === 'interest-payment')
+      .map((transaction) => Number(transaction.date.slice(0, 4)))),
+    ...removedBorrowerTransactions
+      .filter(({ transaction }) => transaction.type === 'interest-payment')
+      .map(({ transaction }) => Number(transaction.date.slice(0, 4))),
+    ...otherProfits.map((profit) => Number(profit.date.slice(0, 4))),
+  ])].filter(Number.isFinite).sort((first, second) => second - first)
+  const monthlyNetProfitByYear = Object.fromEntries(overviewProfitYears.map((year) => [
+    year,
+    getMonthlyNetProfit(borrowers, removedBorrowerTransactions, otherProfits, year),
+  ]))
+  const monthlyNetProfit = monthlyNetProfitByYear[currentYear]
   const totalReceivableInterest = borrowers.reduce((total, borrower) => total + borrower.paydayInterest, 0)
   const totalGroupAllowance = Number((
     members.reduce((total, member) => total + member.withdrawals.reduce(
@@ -5867,7 +5918,8 @@ function App() {
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
           totalOtherProfit={totalOtherProfit}
-          monthlyNetProfit={monthlyNetProfit}
+          monthlyNetProfitByYear={monthlyNetProfitByYear}
+          availableProfitYears={overviewProfitYears}
           cashInTransactions={cashInTransactions}
           cashOutTransactions={cashOutTransactions}
         />
@@ -6013,7 +6065,8 @@ function App() {
           totalLoanProceeds={totalLoanProceeds}
           totalInterestPaid={totalInterestPaid}
           totalOtherProfit={totalOtherProfit}
-          monthlyNetProfit={monthlyNetProfit}
+          monthlyNetProfitByYear={monthlyNetProfitByYear}
+          availableProfitYears={overviewProfitYears}
           cashInTransactions={cashInTransactions}
           cashOutTransactions={cashOutTransactions}
         />
