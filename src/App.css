@@ -2694,7 +2694,7 @@ p {
   background: rgba(255, 255, 255, 0.9);
   border-color: rgba(100, 116, 139, 0.2);
   color: #0f172a;
-  box-shadow: 0 26px 60px rgba(30, 41, 59, 0.12);
+  box-shadow: 0 26px 60px rgba(30, 41, 59, 0.22);
 }
 
 .app-shell[data-theme='light'] .theme-toggle {
@@ -4670,4 +4670,93 @@ select:focus-visible {
   .overview-cash-out-panel {
     padding: 18px 14px;
   }
+}
+
+.app-shell {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: rgba(8, 15, 29, 0.48);
+  backdrop-filter: blur(14px) saturate(135%);
+  -webkit-backdrop-filter: blur(24px) saturate(135%);
+}
+
+.app-shell .panel,
+.app-shell .summary-card,
+.app-shell .stat-box,
+.app-shell .account-card,
+.app-shell .savings-directory-item,
+.app-shell .borrower-item,
+.app-shell .loan-history-item,
+.app-shell .transaction-item,
+.app-shell .bill-item,
+.app-shell .main-nav {
+  border-color: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  box-shadow: 0 16px 38px rgba(2, 8, 23, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+
+.app-shell[data-theme='dark'] .panel,
+.app-shell[data-theme='dark'] .summary-card,
+.app-shell[data-theme='dark'] .stat-box,
+.app-shell[data-theme='dark'] .account-card,
+.app-shell[data-theme='dark'] .savings-directory-item,
+.app-shell[data-theme='dark'] .borrower-item,
+.app-shell[data-theme='dark'] .loan-history-item,
+.app-shell[data-theme='dark'] .transaction-item,
+.app-shell[data-theme='dark'] .bill-item,
+.app-shell[data-theme='dark'] .main-nav {
+  background: linear-gradient(135deg, rgba(35, 54, 80, 0.72), rgba(9, 18, 34, 0.56));
+}
+
+.app-shell[data-theme='light'] {
+  border-color: rgba(255, 255, 255, 0.62);
+  background: rgba(239, 248, 255, 0.12);
+  box-shadow: 0 26px 70px rgba(15, 23, 42, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.app-shell[data-theme='light'] .panel,
+.app-shell[data-theme='light'] .summary-card,
+.app-shell[data-theme='light'] .stat-box,
+.app-shell[data-theme='light'] .account-card,
+.app-shell[data-theme='light'] .savings-directory-item,
+.app-shell[data-theme='light'] .borrower-item,
+.app-shell[data-theme='light'] .loan-history-item,
+.app-shell[data-theme='light'] .transaction-item,
+.app-shell[data-theme='light'] .bill-item,
+.app-shell[data-theme='light'] .main-nav {
+  border-color: rgba(255, 255, 255, 0.72);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.40), rgba(229, 241, 250, 0.43));
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.82);
+}
+
+.app-shell[data-theme='light'] .dashboard .overview-summary-card:nth-child(1) {
+  background: linear-gradient(145deg, rgba(186, 230, 253, 0.56), rgba(248, 250, 252, 0.4));
+}
+
+.app-shell[data-theme='light'] .dashboard .overview-summary-card:nth-child(2) {
+  background: linear-gradient(145deg, rgba(187, 247, 208, 0.56), rgba(248, 250, 252, 0.4));
+}
+
+.app-shell[data-theme='light'] .dashboard .overview-summary-card:nth-child(3) {
+  background: linear-gradient(145deg, rgba(221, 214, 254, 0.56), rgba(248, 250, 252, 0.4));
+}
+
+.app-shell[data-theme='light'] .dashboard .overview-summary-card:nth-child(4) {
+  background: linear-gradient(145deg, rgba(153, 246, 228, 0.56), rgba(248, 250, 252, 0.4));
+}
+
+.app-shell[data-theme='dark'] .dashboard .overview-summary-card:nth-child(1) {
+  background: linear-gradient(145deg, rgba(14, 116, 144, 0.48), rgba(15, 23, 42, 0.46));
+}
+
+.app-shell[data-theme='dark'] .dashboard .overview-summary-card:nth-child(2) {
+  background: linear-gradient(145deg, rgba(6, 95, 70, 0.5), rgba(15, 23, 42, 0.46));
+}
+
+.app-shell[data-theme='dark'] .dashboard .overview-summary-card:nth-child(3) {
+  background: linear-gradient(145deg, rgba(91, 33, 182, 0.46), rgba(15, 23, 42, 0.46));
+}
+
+.app-shell[data-theme='dark'] .dashboard .overview-summary-card:nth-child(4) {
+  background: linear-gradient(145deg, rgba(15, 118, 110, 0.48), rgba(15, 23, 42, 0.46));
 }

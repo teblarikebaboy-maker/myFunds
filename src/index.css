@@ -3,10 +3,13 @@
   line-height: 1.5;
   font-weight: 400;
   color: #f1f5f9;
-  background:
-    radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.2), transparent 24%),
-    #020817;
+  background-color: #020817;
+  background-image:
+    linear-gradient(rgba(2, 8, 23, 0.32), rgba(2, 8, 23, 0.32)),
+    url('/growth-wallpaper.png');
+  background-position: center;
+  background-size: cover;
+  background-attachment: fixed;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -16,10 +19,13 @@
 
 :root[data-theme='light'] {
   color: #0f172a;
-  background:
-    radial-gradient(circle at top left, rgba(14, 165, 233, 0.13), transparent 26%),
-    radial-gradient(circle at bottom right, rgba(45, 212, 191, 0.12), transparent 26%),
-    #eaf0f5;
+  background-color: #dce8f2;
+  background-image:
+    linear-gradient(rgba(226, 238, 247, 0.04), rgba(226, 238, 247, 0.04)),
+    url('/growth-wallpaper.png');
+  background-position: center;
+  background-size: cover;
+  background-attachment: fixed;
   color-scheme: light;
 }
 
