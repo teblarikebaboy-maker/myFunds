@@ -1122,6 +1122,7 @@ function SavingsPage({
   const [collapsedSavingsSummaryHalves, setCollapsedSavingsSummaryHalves] = useState<Set<string>>(() => new Set())
   const [isSavingsHistoryExpanded, setIsSavingsHistoryExpanded] = useState(false)
   const [expandedMemberSavingsTransactions, setExpandedMemberSavingsTransactions] = useState<Set<string>>(() => new Set())
+  const [selectedMemberGuarantors, setSelectedMemberGuarantors] = useState<Record<string, string>>({})
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false)
   const [newMemberName, setNewMemberName] = useState('')
   const [newMemberInitialSavings, setNewMemberInitialSavings] = useState('0')
@@ -1619,6 +1620,11 @@ function SavingsPage({
               {filteredMembers.map((member, index) => {
                 const isMemberTransactionsExpanded = expandedMemberSavingsTransactions.has(member.name)
                 const memberTransactionsId = `member-savings-transactions-${index}`
+                const memberGuarantors = borrowers.filter(
+                  (borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase(),
+                )
+                const selectedGuarantorId = selectedMemberGuarantors[member.name] ?? ''
+                const selectedGuarantor = memberGuarantors.find((borrower) => borrower.id === selectedGuarantorId)
                 return (
                 <li key={member.name} className="savings-directory-item">
                   <div className="savings-member-header">
@@ -1672,9 +1678,24 @@ function SavingsPage({
                     </div>
                     <div className="savings-member-metric">
                       <span>Guarantor Amount</span>
-                      <strong>{formatCurrency(borrowers
-                        .filter((borrower) => borrower.guarantorName?.trim().toLowerCase() === member.name.trim().toLowerCase())
-                        .reduce((total, borrower) => total + borrower.loanAmount, 0))}</strong>
+                      <select
+                        className="guarantor-select"
+                        aria-label={`Select guarantor for ${member.name}`}
+                        value={selectedGuarantor ? selectedGuarantor.id : ''}
+                        disabled={memberGuarantors.length === 0}
+                        onChange={(event) => setSelectedMemberGuarantors((current) => ({
+                          ...current,
+                          [member.name]: event.target.value,
+                        }))}
+                      >
+                        <option value="">
+                          {memberGuarantors.length > 0 ? 'Select guarantor' : 'No guarantors'}
+                        </option>
+                        {memberGuarantors.map((borrower) => (
+                          <option key={borrower.id} value={borrower.id}>{borrower.name}</option>
+                        ))}
+                      </select>
+                      <strong>{selectedGuarantor ? formatCurrency(selectedGuarantor.loanAmount) : '—'}</strong>
                     </div>
                   </div>
                   {isAdmin && editingSavingsMemberName === member.name && (
@@ -3360,39 +3381,6 @@ function ProfitsPage({
         )}
       </section>
 
-      <section className="panel full-width-panel profits-section profits-received-section">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Received payments</p>
-            <h3>Interest and other profits received</h3>
-          </div>
-          <input
-            className="borrower-search profits-payment-search"
-            type="search"
-            aria-label="Search received profit sources"
-            placeholder="Search source"
-            value={paymentSearch}
-            onChange={(event) => setPaymentSearch(event.target.value)}
-          />
-        </div>
-        {searchedProfitSources.length > 0 ? (
-          <ul className="profit-interest-list">
-            {searchedProfitSources.map((payment) => (
-              <li key={payment.id}>
-                <span>{payment.borrowerName}</span>
-                <strong>{formatCurrency(payment.amount)}</strong>
-                <time dateTime={payment.date}>{formatDate(payment.date)}</time>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="savings-history-empty">
-            {filteredProfitSources.length > 0
-              ? 'No received profit sources match your search.'
-              : 'No interest or other profits received for the selected period.'}
-          </p>
-        )}
-      </section>
       <section className="panel full-width-panel profits-section profits-members-section">
         <div className="panel-header">
           <div>
@@ -3520,6 +3508,39 @@ function ProfitsPage({
             )
           })}
         </div>
+      </section>
+      <section className="panel full-width-panel profits-section profits-received-section">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Received payments</p>
+            <h3>Interest and other profits received</h3>
+          </div>
+          <input
+            className="borrower-search profits-payment-search"
+            type="search"
+            aria-label="Search received profit sources"
+            placeholder="Search source"
+            value={paymentSearch}
+            onChange={(event) => setPaymentSearch(event.target.value)}
+          />
+        </div>
+        {searchedProfitSources.length > 0 ? (
+          <ul className="profit-interest-list">
+            {searchedProfitSources.map((payment) => (
+              <li key={payment.id}>
+                <span>{payment.borrowerName}</span>
+                <strong>{formatCurrency(payment.amount)}</strong>
+                <time dateTime={payment.date}>{formatDate(payment.date)}</time>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="savings-history-empty">
+            {filteredProfitSources.length > 0
+              ? 'No received profit sources match your search.'
+              : 'No interest or other profits received for the selected period.'}
+          </p>
+        )}
       </section>
       <section className="panel full-width-panel profits-section profits-payouts-section">
         <div className="panel-header">

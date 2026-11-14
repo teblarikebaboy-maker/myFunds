@@ -1104,6 +1104,24 @@ p {
   font-weight: 700;
 }
 
+.guarantor-select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.guarantor-select:disabled {
+  color: #64748b;
+  cursor: not-allowed;
+}
+
 .delete-member-button {
   flex: 0 0 auto;
   width: auto;
