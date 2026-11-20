@@ -1326,6 +1326,27 @@ p {
   font-size: 0.82rem;
 }
 
+.borrower-name-principal > .critical-loan-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border: 1px solid rgba(248, 113, 113, 0.48);
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.app-shell[data-theme='light'] .borrower-name-principal > .critical-loan-badge {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 .borrower-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -40,7 +40,7 @@ import {
 import './App.css'
 
 type TabKey = 'overview' | 'savings' | 'loans' | 'profits' | 'data' | 'group-update'
-type BorrowerDirectoryFilter = 'all' | 'active' | 'paid'
+type BorrowerDirectoryFilter = 'all' | 'critical' | 'active' | 'paid'
 type BorrowerTransactionInput = {
   principalAddition?: number
   principalPayment?: number
@@ -490,6 +490,49 @@ const getInitialBorrowerLoanAmount = (borrower: Borrower) => {
 const formatPercentage = (value: number) => `${value.toFixed(1)}%`
 
 const hasOutstandingBorrowerBalance = (amount: number) => Math.round(amount * 100) !== 0
+
+const getUnpaidInterestCount = (borrower: Borrower) => {
+  const interestAccruals: Array<{ remainingCents: number; originalCents: number }> = []
+
+  const orderedTransactions = [...(borrower.transactions ?? [])]
+    .map((transaction, originalIndex) => ({ transaction, originalIndex }))
+    .sort((first, second) =>
+      first.transaction.date.localeCompare(second.transaction.date)
+      || first.originalIndex - second.originalIndex,
+    )
+
+  orderedTransactions.forEach(({ transaction }) => {
+      if (transaction.type === 'interest') {
+        const amountCents = Math.max(0, Math.round(transaction.amount * 100))
+        if (amountCents > 0) {
+          interestAccruals.push({ remainingCents: amountCents, originalCents: amountCents })
+        }
+        return
+      }
+
+      if (transaction.type !== 'interest-payment') return
+      let paymentCents = Math.max(0, Math.round(transaction.amount * 100))
+
+      for (const accrual of interestAccruals) {
+        if (paymentCents <= 0) break
+        if (accrual.remainingCents <= 0) continue
+
+        const coveredCents = Math.min(paymentCents, accrual.remainingCents)
+        accrual.remainingCents -= coveredCents
+        paymentCents -= coveredCents
+      }
+    })
+
+  return interestAccruals.reduce((count, accrual) =>
+    count + (accrual.originalCents > 0 ? accrual.remainingCents / accrual.originalCents : 0)
+  , 0)
+}
+
+const isCriticalLoan = (borrower: Borrower) =>
+  (hasOutstandingBorrowerBalance(borrower.loanAmount)
+    || hasOutstandingBorrowerBalance(borrower.paydayInterest))
+    ? getUnpaidInterestCount(borrower) > 8
+    : false
 
 const getTotalInterestPaid = (borrowers: Borrower[], removedTransactions: RemovedBorrowerTransaction[]) =>
   borrowers.reduce((total, borrower) =>
@@ -2046,10 +2089,15 @@ function LoansPage({
   )
   const allBorrowerSections = [
     {
+      title: 'Critical loans',
+      borrowers: filteredBorrowers.filter((borrower) => isCriticalLoan(borrower)),
+    },
+    {
       title: 'Active loans',
       borrowers: filteredBorrowers.filter((borrower) =>
-        hasOutstandingBorrowerBalance(borrower.loanAmount)
-        || hasOutstandingBorrowerBalance(borrower.paydayInterest),
+        !isCriticalLoan(borrower)
+        && (hasOutstandingBorrowerBalance(borrower.loanAmount)
+          || hasOutstandingBorrowerBalance(borrower.paydayInterest)),
       ),
     },
     {
@@ -2062,6 +2110,7 @@ function LoansPage({
   ]
   const borrowerSections = allBorrowerSections.filter((section) =>
     borrowerDirectoryFilter === 'all'
+    || (borrowerDirectoryFilter === 'critical' && section.title === 'Critical loans')
     || (borrowerDirectoryFilter === 'active' && section.title === 'Active loans')
     || (borrowerDirectoryFilter === 'paid' && section.title === 'Fully paid'),
   )
@@ -2445,13 +2494,14 @@ function LoansPage({
               onChange={(event) => setBorrowerDirectoryFilter(event.target.value as BorrowerDirectoryFilter)}
             >
               <option value="all">All</option>
+              <option value="critical">Critical</option>
               <option value="active">Active</option>
               <option value="paid">Fully paid</option>
             </select>
             <input
               className="borrower-search"
               type="search"
-              aria-label="Search active and fully paid borrowers"
+              aria-label="Search critical, active, and fully paid borrowers"
               value={borrowerSearch}
               onChange={(event) => setBorrowerSearch(event.target.value)}
               placeholder="Search all borrowers"
@@ -2474,6 +2524,9 @@ function LoansPage({
                 <div className="borrower-item-header">
                   <div className="borrower-name-principal">
                     <strong>{borrower.name}</strong>
+                    {isCriticalLoan(borrower) && (
+                      <span className="critical-loan-badge">Critical</span>
+                    )}
                     <span>Initial loan: {formatBorrowerCurrency(getInitialBorrowerLoanAmount(borrower))}</span>
                   </div>
                   <div className="borrower-actions">
